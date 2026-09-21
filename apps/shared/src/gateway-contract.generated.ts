@@ -2721,6 +2721,8 @@ export interface PromptSubmitParams {
   session_id: string
   profile?: string | null
   text?: unknown
+  message_id?: string | null
+  submitted_at?: number | null
   display_kind?: string | null
   interrupted?: boolean | null
   queued?: boolean | null
@@ -2747,7 +2749,7 @@ export interface PromptSubmitResult {
   admission_id?: string | null
   forwarded?: boolean | null
 }
-export type PromptSubmitStatus = 'streaming' | 'queued' | 'steered' | 'redirected'
+export type PromptSubmitStatus = 'streaming' | 'queued' | 'steered' | 'redirected' | 'duplicate'
 export interface ClipboardPasteParams {
   session_id: string
   profile?: string | null
