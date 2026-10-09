@@ -813,6 +813,200 @@ async def _send_or_update_status_coro(adapter, chat_id, status_key, content, met
     return await adapter.send(chat_id, content, metadata=metadata)
 
 
+def _approval_send_outcome(future, timeout: float) -> str:
+    """Classify an approval prompt send as ``sent`` / ``failed`` / ``ambiguous``.
+
+    ``ambiguous`` == the scheduling future timed out. The card may well have
+    posted: the connector may only ack after the deadline (slow platform API
+    call, transient backpressure, event-loop stall), and treating that timeout
+    as a failure has been observed in live relay testing to re-send the card
+    repeatedly, leaving the user's tap resolving a prompt whose turn had moved
+    on. Callers must treat
+    ``ambiguous`` as possibly-delivered: keep the prompt registration alive
+    and do NOT re-send or fall back — the boundary rule is that only a
+    DEFINITIVE failure (error result / non-timeout exception / no future)
+    re-asks.
+
+    Definitive failures log their detail here (scheduling exception text or
+    the SendResult error) so callers sharing this classifier keep the
+    diagnostic breadcrumb the old inline code had.
+    """
+    if future is None:
+        logger.warning("Prompt send failed: no scheduling future (loop unavailable)")
+        return "failed"
+    try:
+        result = future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        return "ambiguous"
+    except Exception as exc:
+        logger.warning("Prompt send failed: %s", exc)
+        return "failed"
+    if getattr(result, "success", False):
+        return "sent"
+    logger.warning(
+        "Prompt send failed: %s", getattr(result, "error", None) or "unknown error"
+    )
+    return "failed"
+
+
+def _clarify_send_disposition(fut, *, session_key: str, clarify_mod) -> "str | None":
+    """Decide whether a clarify prompt send aborts the wait, per the boundary rule.
+
+    Same physics as the exec-approval card: the scheduling future can hit its
+    deadline while the clarify card HAS already posted (late connector ack).
+    Treating that timeout as a definitive failure cleared the session out from
+    under a rendered card — the user answers a question whose registration is
+    gone. Only a DEFINITIVE failure (error result / non-timeout exception /
+    no future) tears down the registration and aborts; ``ambiguous`` keeps the
+    registration armed and proceeds to the normal bounded wait, which already
+    handles the truly-lost-card case via its response timeout.
+
+    Returns the abort sentinel string on definitive failure, else ``None``
+    (proceed to ``wait_for_response``).
+    """
+    outcome = _approval_send_outcome(fut, timeout=15)
+    if outcome == "failed":
+        # Couldn't deliver the prompt — clean up and return the sentinel so
+        # the agent can fall back to a sensible default rather than hanging.
+        logger.warning("Clarify send failed definitively; clearing registration")
+        clarify_mod.clear_session(session_key)
+        return "[clarify prompt could not be delivered]"
+    if outcome == "ambiguous":
+        logger.warning(
+            "Clarify prompt send timed out — treating as possibly-delivered "
+            "(no teardown; the registration stays armed for a late reply)"
+        )
+    return None
+
+
+def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_mod) -> str:
+    """Resolve a clarify prompt: send disposition, then the bounded wait.
+
+    The full caller contract in one testable seam: a definitive send failure
+    returns the undeliverable sentinel (registration torn down); ``sent`` and
+    ``ambiguous`` both proceed to ``wait_for_response`` with the configured
+    timeout — for ambiguous, the registration stays armed so a late reply to
+    the (probably rendered) card still resolves.
+    """
+    abort = _clarify_send_disposition(
+        fut, session_key=session_key, clarify_mod=clarify_mod
+    )
+    if abort is not None:
+        return abort
+    timeout = clarify_mod.get_clarify_timeout()
+    response = clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
+    if response is None or response == "":
+        # Timeout or session-boundary cancellation
+        return f"[user did not respond within {int(timeout / 60)}m]"
+    return response
+
+
+async def _clear_durable_clarify_prompt(adapter, interaction) -> bool:
+    """Best-effort remove the inline keyboard after a text answer wins."""
+    if adapter is None or interaction is None:
+        return False
+    chat_id = getattr(interaction, "chat_id", None)
+    message_id = getattr(interaction, "message_id", None)
+    clear_fn = getattr(adapter, "clear_clarify_prompt", None)
+    if (
+        not chat_id
+        or not message_id
+        or not getattr(interaction, "choices", None)
+        or not callable(clear_fn)
+    ):
+        return False
+    try:
+        result = clear_fn(str(chat_id), str(message_id))
+        if inspect.isawaitable(result):
+            await result
+        return True
+    except Exception:
+        logger.debug("Failed to clear durable clarify prompt keyboard", exc_info=True)
+        return False
+
+
+def _durable_clarify_send_result(
+    future,
+    *,
+    interaction_id: str,
+    timeout: float = 15,
+) -> str:
+    """Finish a durable clarify send without waiting for the user's answer.
+
+    The durable interaction is already persisted before ``future`` is
+    scheduled. A successful send records the Telegram prompt message id and
+    returns the provider-visible deferred marker. A slow connector ack is
+    ambiguous, not a send failure: keep the interaction pending and persist
+    the message id if the future completes later.
+    """
+    from gateway.extensions.deferred_clarify import make_deferred_marker
+    from tools.clarify_interaction import cancel_interaction, set_prompt_message_id
+
+    def _persist_message_id(completed_future) -> None:
+        try:
+            result = completed_future.result()
+        except Exception:
+            return
+        if getattr(result, "success", False):
+            message_id = getattr(result, "message_id", None)
+            if message_id:
+                set_prompt_message_id(interaction_id, str(message_id))
+
+    if future is None:
+        cancel_interaction(interaction_id, reason="send_not_scheduled")
+        return "[clarify prompt could not be delivered]"
+
+    try:
+        result = future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        future.add_done_callback(_persist_message_id)
+        return make_deferred_marker(interaction_id)
+    except Exception:
+        cancel_interaction(interaction_id, reason="send_failed")
+        return "[clarify prompt could not be delivered]"
+
+    if not getattr(result, "success", False):
+        cancel_interaction(interaction_id, reason="send_failed")
+        return "[clarify prompt could not be delivered]"
+
+    message_id = getattr(result, "message_id", None)
+    if message_id:
+        set_prompt_message_id(interaction_id, str(message_id))
+    return make_deferred_marker(interaction_id)
+
+
+def _create_durable_clarify_interaction(
+    *,
+    session_key: str,
+    session_id: str | None,
+    source,
+    fallback_chat_id,
+    metadata: dict | None,
+    question: str,
+    choices,
+):
+    """Persist the routing identity used by Telegram's durable clarify flow."""
+    from tools.clarify_interaction import create_clarify_interaction
+
+    source_chat_id = getattr(source, "chat_id", None) or fallback_chat_id
+    source_thread_id = getattr(source, "thread_id", None)
+    source_user_id = getattr(source, "user_id", None)
+    durable_metadata = dict(metadata or {})
+    durable_metadata["durable_clarify"] = True
+    interaction = create_clarify_interaction(
+        session_key=session_key,
+        platform="telegram",
+        question=question,
+        choices=choices,
+        session_id=session_id,
+        chat_id=str(source_chat_id) if source_chat_id is not None else None,
+        thread_id=str(source_thread_id) if source_thread_id is not None else None,
+        user_id=str(source_user_id) if source_user_id is not None else None,
+        metadata=durable_metadata,
+    )
+    return interaction, durable_metadata
+
+
 def _resolve_progress_thread_id(
     platform: Any,
     source_thread_id: Any,
@@ -3562,6 +3756,12 @@ def _normalize_empty_agent_response(
     message hits a stale generation token and returns an empty result,
     leaving the platform with nothing to send. (#31884)
     """
+    if agent_result.get("deferred_clarify_interaction_id") or str(
+        agent_result.get("turn_exit_reason") or ""
+    ).startswith("deferred_clarify("):
+        # A durable clarify prompt is itself the user-facing response. Do not
+        # emit NO_REPLY or the generic empty-response fallback.
+        return ""
     if response:
         return response
 
@@ -5176,14 +5376,30 @@ class TurnRunner:
             if not ctx._status_adapter:
                 return ""
 
-            clarify_id = _uuid.uuid4().hex[:10]
-            _clarify_mod.register(
-                clarify_id=clarify_id,
-                session_key=ctx.session_key or "",
-                question=question,
-                choices=list(choices) if choices else None,
-                multi_select=bool(multi_select),
-            )
+            choice_list = list(choices) if choices else None
+            platform_value = getattr(getattr(ctx.source, "platform", None), "value", getattr(ctx.source, "platform", ""))
+            platform_key = str(platform_value or "").lower()
+            if platform_key == "telegram":
+                interaction, durable_metadata = _create_durable_clarify_interaction(
+                    session_key=ctx.session_key or "",
+                    session_id=ctx.session_id,
+                    source=ctx.source,
+                    fallback_chat_id=ctx._status_chat_id,
+                    metadata=ctx._status_thread_metadata,
+                    question=question,
+                    choices=choice_list,
+                )
+                clarify_id = interaction.interaction_id
+            else:
+                clarify_id = _uuid.uuid4().hex[:10]
+                _clarify_mod.register(
+                    clarify_id=clarify_id,
+                    session_key=ctx.session_key or "",
+                    question=question,
+                    choices=choice_list,
+                    multi_select=bool(multi_select),
+                )
+                durable_metadata = ctx._status_thread_metadata
 
             # Pause typing — like approval, we don't want a "thinking..."
             # status to obscure the prompt or block the user from typing
@@ -5218,38 +5434,28 @@ class TurnRunner:
                 ctx._status_adapter.send_clarify(
                     chat_id=ctx._status_chat_id,
                     question=question,
-                    choices=list(choices) if choices else None,
+                    choices=choice_list,
                     clarify_id=clarify_id,
                     session_key=ctx.session_key or "",
-                    metadata=ctx._status_thread_metadata,
+                    metadata=durable_metadata,
                 ),
                 ctx._loop_for_step,
                 logger=logger,
                 log_message="Clarify send failed to schedule",
             )
-            if fut is None:
-                send_ok = False
-            else:
-                try:
-                    result = fut.result(timeout=15)
-                    send_ok = bool(getattr(result, "success", False))
-                except Exception as exc:
-                    logger.warning("Clarify send failed: %s", exc)
-                    send_ok = False
+            if platform_key == "telegram":
+                return _durable_clarify_send_result(
+                    fut,
+                    interaction_id=clarify_id,
+                )
+            return _clarify_send_then_wait(
+                fut,
+                clarify_id=clarify_id,
+                session_key=ctx.session_key or "",
+                clarify_mod=_clarify_mod,
+            )
 
-            if not send_ok:
-                # Couldn't deliver the prompt — clean up and return
-                # sentinel so the agent can fall back to a sensible
-                # default rather than hanging.
-                _clarify_mod.clear_session(ctx.session_key or "")
-                return "[clarify prompt could not be delivered]"
-
-            timeout = _clarify_mod.get_clarify_timeout()
-            response = _clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
-            if response is None or response == "":
-                # Timeout or session-boundary cancellation
-                return f"[user did not respond within {int(timeout / 60)}m]"
-            return response
+        agent._deferred_clarify_interaction_id = None
 
         agent.clarify_callback = _clarify_callback_sync
 
@@ -5759,6 +5965,11 @@ class TurnRunner:
             0 if (_session_was_split or _compacted_in_place) else len(agent_history)
         )
 
+        if result.get("deferred_clarify_interaction_id") or str(
+            result.get("turn_exit_reason") or ""
+        ).startswith("deferred_clarify("):
+            final_response = ""
+
         if not final_response:
             final_response = _normalize_empty_agent_response(
                 result, final_response or "", history_len=len(agent_history),
@@ -5789,6 +6000,8 @@ class TurnRunner:
                 "history_offset": _effective_history_offset,
                 "compacted_in_place": _compacted_in_place,
                 "session_id": effective_session_id,
+                "deferred_clarify_interaction_id": result.get("deferred_clarify_interaction_id"),
+                "turn_exit_reason": result.get("turn_exit_reason"),
                 "last_prompt_tokens": _last_prompt_toks,
                 "input_tokens": _input_toks,
                 "output_tokens": _output_toks,
@@ -5872,6 +6085,14 @@ class TurnRunner:
             "model": _resolved_model,
             "context_length": _context_length,
             "session_id": effective_session_id,
+            "deferred_clarify_interaction_id": (
+                ctx.result_holder[0].get("deferred_clarify_interaction_id")
+                if ctx.result_holder[0] else None
+            ),
+            "turn_exit_reason": (
+                ctx.result_holder[0].get("turn_exit_reason")
+                if ctx.result_holder[0] else None
+            ),
             "response_previewed": result.get("response_previewed", False),
             "response_transformed": result.get("response_transformed", False),
             # Pass through the agent_persisted flag so the persistence block
@@ -16546,16 +16767,27 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if message_text and not str(message_text).lstrip().startswith("/"):
             try:
                 from gateway.extensions.deferred_clarify import build_recovery_prompt
-                from tools.clarify_interaction import resolve_text_for_session
+                from tools.clarify_interaction import (
+                    cancel_session_for_actor,
+                    resolve_text_for_session,
+                )
 
+                _actor_kwargs = {
+                    "user_id": str(source.user_id) if source.user_id is not None else None,
+                    "chat_id": str(source.chat_id) if source.chat_id is not None else None,
+                    "thread_id": str(source.thread_id) if source.thread_id is not None else None,
+                }
                 _resolved_clarify = resolve_text_for_session(
                     session_key,
                     str(message_text),
-                    user_id=str(source.user_id) if source.user_id is not None else None,
-                    chat_id=str(source.chat_id) if source.chat_id is not None else None,
-                    thread_id=str(source.thread_id) if source.thread_id is not None else None,
+                    **_actor_kwargs,
                 )
                 if _resolved_clarify is not None:
+                    if getattr(source, "platform", None) == Platform.TELEGRAM:
+                        await _clear_durable_clarify_prompt(
+                            self._adapter_for_source(source),
+                            _resolved_clarify,
+                        )
                     message_text = build_recovery_prompt(
                         question=_resolved_clarify.question,
                         answer=_resolved_clarify.answer or str(message_text),
@@ -16564,6 +16796,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         event.metadata["deferred_clarify_interaction_id"] = _resolved_clarify.interaction_id
                     except Exception:
                         pass
+                else:
+                    # A normal turn supersedes an unanswered clarify.  This
+                    # prevents a stale button from resuming an older transcript
+                    # after the user has already moved the same session on.
+                    cancel_session_for_actor(
+                        session_key,
+                        reason="superseded_by_normal_turn",
+                        **_actor_kwargs,
+                    )
             except Exception:
                 logger.debug("deferred clarify text intercept failed", exc_info=True)
 

@@ -62,6 +62,20 @@ def _make_callback_query(data, *, chat_id=12345, user_id="777", thread_id=None):
     return update, query
 
 
+def test_clear_clarify_prompt_removes_reply_markup():
+    import asyncio
+
+    adapter = _make_adapter()
+    adapter._bot.edit_message_reply_markup = AsyncMock()
+
+    assert asyncio.run(adapter.clear_clarify_prompt("12345", "321")) is True
+    adapter._bot.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=12345,
+        message_id=321,
+        reply_markup=None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_durable_send_clarify_uses_durable_prefix_without_in_memory_state():
     adapter = _make_adapter()
@@ -236,6 +250,9 @@ async def test_text_intercept_resolves_awaiting_durable_answer_in_same_session(t
         )
 
         runner = _make_runner()
+        adapter = _make_adapter()
+        adapter.clear_clarify_prompt = AsyncMock()
+        runner.adapters[Platform.TELEGRAM] = adapter
         source = SessionSource(
             platform=Platform.TELEGRAM,
             chat_id="12345",
@@ -252,6 +269,7 @@ async def test_text_intercept_resolves_awaiting_durable_answer_in_same_session(t
             choices=["staging", "production"],
             chat_id="12345",
             user_id="777",
+            message_id="321",
             ttl_seconds=3600,
         )
         assert mark_awaiting_text(interaction.interaction_id, user_id="777", chat_id="12345").ok
@@ -269,6 +287,47 @@ async def test_text_intercept_resolves_awaiting_durable_answer_in_same_session(t
         assert event.metadata["deferred_clarify_interaction_id"] == interaction.interaction_id
         assert "Deploy where?" in prepared
         assert "custom production" in prepared
+        adapter.clear_clarify_prompt.assert_awaited_once_with("12345", "321")
+    finally:
+        reset_hermes_home_override(token)
+
+
+@pytest.mark.asyncio
+async def test_text_intercept_cancels_unanswered_clarify_on_normal_turn(tmp_path):
+    token = set_hermes_home_override(tmp_path)
+    try:
+        from tools.clarify_interaction import create_clarify_interaction, get_interaction
+
+        runner = _make_runner()
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="12345",
+            chat_type="dm",
+            user_id="777",
+        )
+        event = MessageEvent(text="start a different task", message_type=MessageType.TEXT, source=source)
+        event.metadata = {}
+        session_key = "telegram:12345:777"
+        interaction = create_clarify_interaction(
+            session_key=session_key,
+            platform="telegram",
+            question="Deploy where?",
+            choices=["staging", "production"],
+            chat_id="12345",
+            user_id="777",
+            ttl_seconds=3600,
+        )
+
+        prepared = await runner._prepare_inbound_message_text(
+            event=event,
+            source=source,
+            history=[],
+            session_key=session_key,
+        )
+
+        assert prepared == "start a different task"
+        assert get_interaction(interaction.interaction_id).status == "cancelled"
+        assert "deferred_clarify_interaction_id" not in event.metadata
     finally:
         reset_hermes_home_override(token)
 

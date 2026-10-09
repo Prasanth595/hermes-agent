@@ -5758,6 +5758,26 @@ class TelegramAdapter(BasePlatformAdapter):
             logger.warning("[%s] send_clarify failed: %s", self.name, _redact_telegram_error_text(e))
             return SendResult(success=False, error=_redact_telegram_error_text(e))
 
+    async def clear_clarify_prompt(self, chat_id: str, message_id: str) -> bool:
+        """Remove the inline keyboard from a durable clarify prompt."""
+        if not self._bot or not message_id:
+            return False
+        try:
+            await self._bot.edit_message_reply_markup(
+                chat_id=normalize_telegram_chat_id(chat_id),
+                message_id=int(message_id),
+                reply_markup=None,
+            )
+            return True
+        except Exception:
+            logger.debug(
+                "[%s] clear_clarify_prompt failed for message %s",
+                self.name,
+                message_id,
+                exc_info=True,
+            )
+            return False
+
     async def send_model_picker(
         self,
         chat_id: str,

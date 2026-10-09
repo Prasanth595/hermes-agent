@@ -318,7 +318,11 @@ def resolve_text_for_session(
         rows = conn.execute(
             """
             SELECT * FROM gateway_interactions
-            WHERE session_key = ? AND kind = ? AND status IN ('awaiting_text', 'pending')
+            WHERE session_key = ? AND kind = ?
+              AND (
+                status = 'awaiting_text'
+                OR (status = 'pending' AND choices_json IS NULL)
+              )
             ORDER BY CASE status WHEN 'awaiting_text' THEN 0 ELSE 1 END, created_at ASC
             """,
             (session_key, _KIND_CLARIFY),
@@ -381,6 +385,57 @@ def cancel_session(session_key: str, *, reason: str = "cancelled", now: Optional
         return int(cur.rowcount or 0)
 
 
+def cancel_session_for_actor(
+    session_key: str,
+    *,
+    user_id: Optional[str] = None,
+    chat_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    reason: str = "superseded_by_normal_turn",
+    now: Optional[float] = None,
+) -> int:
+    """Cancel active interactions owned by the actor starting a new turn.
+
+    A session can be shared by multiple users (for example, a group chat), so
+    invalidating every interaction for ``session_key`` would let an unrelated
+    participant cancel somebody else's prompt.  Load the active rows under the
+    same transaction and apply the existing routing authorization predicate
+    before changing their state.
+    """
+    del reason  # reserved for metadata in a future migration
+    now_f = float(time.time() if now is None else now)
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT * FROM gateway_interactions
+            WHERE session_key = ? AND status IN ('pending', 'awaiting_text')
+            """,
+            (session_key,),
+        ).fetchall()
+        interaction_ids = [
+            interaction.interaction_id
+            for row in rows
+            if (interaction := _row_to_interaction(row)) is not None
+            and _authorized(
+                interaction,
+                user_id=user_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
+            )
+        ]
+        if not interaction_ids:
+            return 0
+        placeholders = ",".join("?" for _ in interaction_ids)
+        cur = conn.execute(
+            f"UPDATE gateway_interactions SET status = 'cancelled', updated_at = ? "
+            f"WHERE session_key = ? AND status IN ('pending', 'awaiting_text') "
+            f"AND interaction_id IN ({placeholders})",
+            (now_f, session_key, *interaction_ids),
+        )
+        return int(cur.rowcount or 0)
+
+
 def cancel_all(*, reason: str = "cancelled", now: Optional[float] = None) -> int:
     """Cancel every active durable interaction in the current profile."""
     del reason  # reserved for metadata in a future migration
@@ -405,5 +460,6 @@ __all__ = [
     "expire_old",
     "cancel_interaction",
     "cancel_session",
+    "cancel_session_for_actor",
     "cancel_all",
 ]

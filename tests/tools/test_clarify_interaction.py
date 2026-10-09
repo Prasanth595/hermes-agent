@@ -182,6 +182,94 @@ def test_cancel_interaction_only_cancels_one_row(tmp_path):
         reset_hermes_home_override(token)
 
 
+def test_cancel_session_for_actor_only_cancels_matching_owner(tmp_path):
+    token = _use_home(tmp_path)
+    try:
+        from tools.clarify_interaction import (
+            cancel_session_for_actor,
+            create_clarify_interaction,
+            get_interaction,
+        )
+
+        owner_prompt = create_clarify_interaction(
+            session_key="shared-session",
+            platform="telegram",
+            question="Owner prompt?",
+            choices=["yes"],
+            chat_id="chat",
+            thread_id="topic",
+            user_id="owner",
+            ttl_seconds=3600,
+        )
+        other_prompt = create_clarify_interaction(
+            session_key="shared-session",
+            platform="telegram",
+            question="Other prompt?",
+            choices=["no"],
+            chat_id="chat",
+            thread_id="topic",
+            user_id="other",
+            ttl_seconds=3600,
+        )
+
+        assert cancel_session_for_actor(
+            "shared-session",
+            user_id="owner",
+            chat_id="chat",
+            thread_id="topic",
+        ) == 1
+        assert get_interaction(owner_prompt.interaction_id).status == "cancelled"
+        assert get_interaction(other_prompt.interaction_id).status == "pending"
+
+        assert cancel_session_for_actor(
+            "shared-session",
+            user_id="intruder",
+            chat_id="chat",
+            thread_id="topic",
+        ) == 0
+        assert get_interaction(other_prompt.interaction_id).status == "pending"
+    finally:
+        reset_hermes_home_override(token)
+
+
+def test_cancel_session_for_actor_cancels_awaiting_text(tmp_path):
+    token = _use_home(tmp_path)
+    try:
+        from tools.clarify_interaction import (
+            cancel_session_for_actor,
+            create_clarify_interaction,
+            get_interaction,
+            mark_awaiting_text,
+        )
+
+        interaction = create_clarify_interaction(
+            session_key="s1",
+            platform="telegram",
+            question="Explain?",
+            choices=["other"],
+            chat_id="chat",
+            thread_id="topic",
+            user_id="owner",
+            ttl_seconds=3600,
+        )
+        assert mark_awaiting_text(
+            interaction.interaction_id,
+            user_id="owner",
+            chat_id="chat",
+            thread_id="topic",
+        ).ok
+
+        assert cancel_session_for_actor(
+            "s1",
+            user_id="owner",
+            chat_id="chat",
+            thread_id="topic",
+        ) == 1
+        assert get_interaction(interaction.interaction_id).status == "cancelled"
+    finally:
+        reset_hermes_home_override(token)
+
+
 def test_expired_interaction_cannot_resolve(tmp_path):
     token = _use_home(tmp_path)
     try:
