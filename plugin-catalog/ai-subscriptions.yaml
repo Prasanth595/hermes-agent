@@ -1,0 +1,26 @@
+# Community catalog entry — ai-subscriptions
+#
+# Owner-submitted: the PR author (`rahuloruganti`) owns and maintains the repo below.
+# Exact-SHA pin (40-hex). No self-updating code: the desktop half ships as static
+# files under `desktop/plugin.js` and never fetches, downloads, or replaces itself.
+# This is the `catalog/` edition: it reads no credentials and makes no network calls.
+name: ai-subscriptions
+repo: https://github.com/rahuloruganti/hermes-ai-subscriptions
+sha: "c33a64df787d3493c2bc7c34e3d7a2702f88d75f"
+subdir: catalog
+version: "0.1.0"
+title: AI Subscriptions
+description: Your AI subscriptions and token usage in Hermes Desktop. A page with Overview, Usage and Plans tabs, plus a status-bar chip where you pick which subscriptions to keep. Quota comes from Hermes's own model.options and usage.bars RPCs; token usage covers Hermes, Claude Code and the Grok CLI. Disclosure — read-only reads outside the plugin's data - Hermes state.db and models_dev_cache.json, ~/.claude/projects/**/*.jsonl and ~/.grok/logs/unified.jsonl plus ~/.grok/sessions/*/*/summary.json (token counts only). No credential, .env or auth.json reads, no network calls, no shell commands, no background processes, no telemetry.
+maintainer: rahuloruganti
+tier: community
+category: desktop
+docs_url: https://github.com/rahuloruganti/hermes-ai-subscriptions#readme
+requires_hermes: ">=0.22.2"
+screenshots:
+  - https://raw.githubusercontent.com/rahuloruganti/hermes-ai-subscriptions/c33a64df787d3493c2bc7c34e3d7a2702f88d75f/assets/plans-and-picker.png
+  - https://raw.githubusercontent.com/rahuloruganti/hermes-ai-subscriptions/c33a64df787d3493c2bc7c34e3d7a2702f88d75f/assets/usage.png
+capabilities:
+  provides_tools: []
+  provides_hooks: []
+  provides_middleware: []
+  requires_env: []
