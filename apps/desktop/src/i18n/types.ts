@@ -1006,6 +1006,8 @@ export interface Translations extends NoticeTranslations {
       disableF12Desc: string
       alwaysExternalLinksTitle: string
       alwaysExternalLinksDesc: string
+      historyArrowsTitle: string
+      historyArrowsDesc: string
       attachmentSizeTitle: string
       attachmentSizeDesc: string
       attachmentSizeUnit: string
