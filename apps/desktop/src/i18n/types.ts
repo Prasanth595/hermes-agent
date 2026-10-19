@@ -2966,6 +2966,9 @@ export interface Translations extends NoticeTranslations {
     queueStuckBody: string
     queueDroppedTitle: string
     queueDroppedBody: string
+    steerRefusedTitle: string
+    steerRefusedQueuedBody: string
+    steerRefusedRestoredBody: string
     terminalSelectionMissingTitle: string
     terminalSelectionMissingBody: string
     queuedTerminalSelectionExpiredBody: string
