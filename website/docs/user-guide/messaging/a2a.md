@@ -135,7 +135,7 @@ Secure by default; every widening step is explicit:
 | `A2A_PUSH_SECRET` | bearer token | HMAC secret for push-notification signing |
 | `A2A_ADVERTISED_TOOLSETS` | all registered | Restrict which skills appear on the Agent Card |
 
-Behind a reverse proxy or Kubernetes Service, set `A2A_PUBLIC_URL` (or rely on `X-Forwarded-Host`/`X-Forwarded-Proto`) so the Agent Card advertises a URL peers can actually call back. Prefer `A2A_PEER_TOKENS` there: with a shared `A2A_BEARER_TOKEN` the identity is the caller's IP, which behind a proxy is the proxy's for every peer.
+Behind a reverse proxy or Kubernetes Service, set `A2A_PUBLIC_URL` (or rely on `X-Forwarded-Host`/`X-Forwarded-Proto`/`X-Forwarded-Prefix`) so the Agent Card advertises a URL peers can actually call back. Prefer `A2A_PEER_TOKENS` there: with a shared `A2A_BEARER_TOKEN` the identity is the caller's IP, which behind a proxy is the proxy's for every peer.
 
 ## Quick test
 

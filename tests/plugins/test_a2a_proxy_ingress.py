@@ -101,3 +101,19 @@ def test_ipv6_any_bind_serves_both_families(monkeypatch):
             await adapter.disconnect()
 
     asyncio.run(run())
+
+
+@pytest.mark.integration
+def test_card_advertises_the_proxy_prefix(monkeypatch):
+    adapter, port = _live_adapter(monkeypatch)
+    headers = {"X-Forwarded-Host": "agent.example.com", "X-Forwarded-Proto": "https", "X-Forwarded-Prefix": "/a2a"}
+
+    async def run():
+        assert await adapter.connect() is True
+        try:
+            card = await asyncio.to_thread(_get_json, f"http://127.0.0.1:{port}/.well-known/agent-card.json", headers)
+            assert card["supportedInterfaces"][0]["url"] == "https://agent.example.com/a2a/"
+        finally:
+            await adapter.disconnect()
+
+    asyncio.run(run())
