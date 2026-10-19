@@ -325,3 +325,9 @@ native/fts5_cjk/*.so
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
+
+# Windows verification report written by scripts/windows-verify-uv-isolation.sh
+uv-isolation-windows-report.txt
+
+# Scratch temp root created by scripts/windows-verify-uv-isolation.sh
+.win-verify-tmp/
