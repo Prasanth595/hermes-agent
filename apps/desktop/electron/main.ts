@@ -173,6 +173,7 @@ import {
   type ProfileRouteOptions,
   profileSshOverride,
   type RegistryBackendRequestScope,
+  registryScopeRemoteProfile,
   resolveAuthMode,
   resolveProfileApiRequest,
   resolveProfileBackendRoute,
@@ -10815,7 +10816,7 @@ async function ensureRegistryBackend(
         port: source.port,
         keyPath: source.keyPath,
         remoteHermesPath: source.remoteHermesPath,
-        remoteProfile: source.remoteProfile || (profileKey === 'default' ? '' : profileKey)
+        remoteProfile: registryScopeRemoteProfile(source.remoteProfile, profileKey)
       })
     }
 
@@ -11146,7 +11147,7 @@ function managedSshConfig(source, profile = '') {
     port: source.port,
     keyPath: source.keyPath,
     remoteHermesPath: source.remoteHermesPath,
-    remoteProfile: source.remoteProfile || (profileKey === 'default' ? '' : profileKey)
+    remoteProfile: registryScopeRemoteProfile(source.remoteProfile, profileKey)
   })
 }
 
