@@ -6340,7 +6340,7 @@ function installBrowserNavGestures(window) {
   })
 }
 
-function sendOpenFolderRequested() {
+function sendMenuRequest(channel: 'hermes:new-temporary-chat-requested' | 'hermes:open-folder-requested') {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return
   }
@@ -6351,7 +6351,7 @@ function sendOpenFolderRequested() {
     return
   }
 
-  webContents.send('hermes:open-folder-requested')
+  webContents.send(channel)
 }
 
 // Tell the renderer the machine just woke. Sleep silently drops the
@@ -6527,10 +6527,10 @@ function buildApplicationMenu() {
       // a menu accelerator would fight the rebind panel and (on macOS) be
       // swallowed before the renderer sees it. Here purely for discoverability.
       { click: () => createInstanceWindow(), label: 'New Window' },
-      // Same no-accelerator rationale: ⌘O is the rebindable renderer keybind
-      // (workspace.openFolder). Clicking runs the same open-folder-as-project
-      // flow through the renderer.
-      { click: () => sendOpenFolderRequested(), label: 'Open Folder…' },
+      // Same no-accelerator rationale: ⌘⇧P / ⌘O are rebindable renderer keybinds
+      // (session.newTemporary / workspace.openFolder); clicking runs the renderer flow.
+      { click: () => sendMenuRequest('hermes:new-temporary-chat-requested'), label: 'New Temporary Chat' },
+      { click: () => sendMenuRequest('hermes:open-folder-requested'), label: 'Open Folder…' },
       { type: 'separator' },
       IS_MAC
         ? {
