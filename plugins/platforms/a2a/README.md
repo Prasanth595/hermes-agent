@@ -56,7 +56,9 @@ via `tasks/get`.
 ## Security
 
 - **No token ⇒ localhost only.** The server binds `127.0.0.1` and refuses to
-  widen unless you configure a token *and* set `A2A_HOST`.
+  widen unless you configure a token *and* set `A2A_HOST`. In this mode it refuses
+  requests carrying reverse-proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`),
+  since a proxy on the same host would make every caller look local.
 - **Per-peer tokens**: `A2A_PEER_TOKENS="alice:tok1,bob:tok2"` gives each
   remote agent its own credential; that authenticated name (never anything
   in the request body) drives rate limiting, trust, and audit.
@@ -75,7 +77,7 @@ via `tasks/get`.
 |---|---|---|
 | `A2A_PEER_TOKENS` | _(unset)_ | Per-peer credentials `name:token,…` (preferred). |
 | `A2A_BEARER_TOKEN` | _(unset)_ | Shared token; identity falls back to caller IP. |
-| `A2A_HOST` | `127.0.0.1` | Bind host. Only widens with a token set. |
+| `A2A_HOST` | `127.0.0.1` | Bind host. Only widens with a token set. `::` serves IPv6 and IPv4. |
 | `A2A_PORT` | `9900` | Inbound port. |
 | `A2A_AGENT_NAME` | hostname-derived | Name on the Agent Card. |
 | `A2A_PUBLIC_URL` | _(unset)_ | Routable URL advertised on the card (reverse proxies). |

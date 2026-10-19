@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import socket
 import threading
 import time
 import urllib.parse
@@ -38,6 +39,8 @@ _MIN_ORPHAN_TIMEOUT, _MAX_ORPHAN_TIMEOUT, _WATCHDOG_INTERVAL = 300, 86400, 60
 _MAX_BODY = 1_048_576  # 1MB max request body — prevents DoS via memory exhaustion
 _SSE_KEEPALIVE = 5  # seconds between SSE keepalive comments
 _DEFAULT_DESCRIPTION = "Hermes Agent — a general-purpose agent reachable over A2A."
+# Any of these means a reverse proxy relayed the request (A2ASecurityContext.authenticate).
+_PROXY_HEADERS = ("X-Forwarded-For", "Forwarded", "X-Real-IP")
 
 _ok = protocol.jsonrpc_result
 _err = protocol.jsonrpc_error
@@ -120,6 +123,16 @@ def _profile_home(profile: str) -> Optional[str]:
     return None
 
 
+class _DualStackHTTPServer(ThreadingHTTPServer):
+    """IPv6 bind (``A2A_HOST=::``) that also accepts IPv4; some private networks (Fly 6PN) are IPv6-only."""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 def _daemon_thread(target, name: str) -> threading.Thread:
     t = threading.Thread(target=target, name=name, daemon=True)
     t.start()
@@ -156,6 +169,11 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
     def _client_ip(self) -> str:
         return self.client_address[0] if self.client_address else ""
 
+    def _authenticate(self) -> Optional[str]:
+        forwarded = any(self.headers.get(h) for h in _PROXY_HEADERS)
+        return self.adapter._security_context.authenticate(
+            self.headers.get("Authorization"), self._client_ip(), forwarded=forwarded)
+
     def _request_public_url(self) -> str:
         """A2A_PUBLIC_URL > X-Forwarded-Host / Host (scheme from X-Forwarded-Proto) > "" (bind host).
 
@@ -187,15 +205,14 @@ class A2ARequestHandler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "not found"})
         payload = {"status": "ok", "agent": agent.get("name") or adapter.agent_name}
         # Agent Cards are public; profile/tenant topology is not leaked on remote unauthenticated GETs.
-        sec = adapter._security_context
-        if sec.localhost_only() or sec.authenticate(self.headers.get("Authorization"), self._client_ip()) is not None:
+        if self._authenticate() is not None:
             payload["served_agents"] = adapter._served_agent_summary(public_url=public_url)
         self._json(200, payload)
 
     def do_POST(self):
         adapter = self.adapter
         # Identity comes from the credential (or the socket in localhost-only mode) — never the body.
-        identity = adapter._security_context.authenticate(self.headers.get("Authorization"), self._client_ip())
+        identity = self._authenticate()
         if identity is None:
             return self._error(401, None, protocol.ERR_UNAUTHORIZED, "unauthorized")
         try:
@@ -296,7 +313,8 @@ class A2AAdapter(BasePlatformAdapter):
         # Capture the gateway loop so the HTTP thread can marshal events via run_coroutine_threadsafe.
         self._loop = asyncio.get_running_loop()
         try:
-            self._httpd = ThreadingHTTPServer((self.host, self.port), A2ARequestHandler)
+            server_cls = _DualStackHTTPServer if ":" in self.host else ThreadingHTTPServer
+            self._httpd = server_cls((self.host, self.port), A2ARequestHandler)
         except OSError as e:
             logger.error("A2A: could not bind %s:%s — %s", self.host, self.port, e)
             self._set_fatal_error("bind_failed", f"A2A bind failed: {e}", retryable=True)
