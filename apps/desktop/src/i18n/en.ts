@@ -4732,7 +4732,8 @@ export const en: Translations = {
       restoreNext: 'Restore next checkpoint',
       goForward: 'Go forward',
       sendEdited: 'Send edited message',
-      attachingFile: 'Attaching…'
+      attachingFile: 'Attaching…',
+      quoteInChat: 'Quote in chat'
     },
     approval: {
       gatewayDisconnected:
