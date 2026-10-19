@@ -5393,7 +5393,7 @@ function fetchJson(url, token, options: any = {}) {
 
         const parsed = new URL(url)
         const client = parsed.protocol === 'https:' ? https : http
-        const agent = jsonAgentFor(parsed.protocol)
+        const agent = options.freshConnection ? false : jsonAgentFor(parsed.protocol)
         const timeoutMs = resolveTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
 
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -5406,6 +5406,8 @@ function fetchJson(url, token, options: any = {}) {
           parsed,
           {
             agent,
+            // Probe deadlines include DNS/connect and response time, not just socket inactivity.
+            ...(options.freshConnection ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
             method: options.method || 'GET',
             headers: {
               ...headersForRemoteRequest(url),
@@ -5488,7 +5490,7 @@ function fetchJson(url, token, options: any = {}) {
         req.end()
       })
     },
-    { method: options.method || 'GET' }
+    { method: options.method || 'GET', ...(options.freshConnection ? { maxRetries: 0 } : {}) }
   )
 }
 
@@ -5513,7 +5515,7 @@ function fetchPublicJson(url, options: any = {}) {
         }
 
         const client = parsed.protocol === 'https:' ? https : http
-        const agent = jsonAgentFor(parsed.protocol)
+        const agent = options.freshConnection ? false : jsonAgentFor(parsed.protocol)
         const timeoutMs = resolveTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
 
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -5526,6 +5528,8 @@ function fetchPublicJson(url, options: any = {}) {
           parsed,
           {
             agent,
+            // Probe deadlines include DNS/connect and response time, not just socket inactivity.
+            ...(options.freshConnection ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
             method: options.method || 'GET',
             headers: {
               ...headersForRemoteRequest(url),
@@ -5590,7 +5594,7 @@ function fetchPublicJson(url, options: any = {}) {
 
         req.end()
       }),
-    { method: options.method || 'GET' }
+    { method: options.method || 'GET', ...(options.freshConnection ? { maxRetries: 0 } : {}) }
   )
 }
 
@@ -15426,7 +15430,14 @@ async function getJsonForBackend(descriptor, path, opts: any = {}) {
 async function fetchJsonForBackend(
   descriptor,
   path,
-  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number; profileScoped?: boolean } = {}
+  opts: {
+    method?: string
+    body?: unknown
+    upload?: unknown
+    timeoutMs?: number
+    profileScoped?: boolean
+    freshConnection?: boolean
+  } = {}
 ) {
   const url = `${descriptor.baseUrl}${path}`
 
@@ -15463,6 +15474,7 @@ async function fetchJsonForBackend(
       method: opts.method,
       body: opts.body,
       timeoutMs: opts.timeoutMs,
+      freshConnection: opts.freshConnection,
       headers: descriptor.headers
     }
 
@@ -15478,6 +15490,7 @@ async function fetchJsonForBackend(
     body: opts.body,
     upload: opts.upload,
     timeoutMs: opts.timeoutMs,
+    freshConnection: opts.freshConnection,
     headers: descriptor.headers,
     gatewayDescriptor: descriptor.gatewayEndpoint ? descriptor : undefined
   })
