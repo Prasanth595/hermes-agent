@@ -103,7 +103,7 @@ def _run_in(root: Path, *command: str, sentinel: str | None = "{root}/state/fact
         env["__HERMES_ACTIVATED"] = sentinel.replace("{root}", posix(root))
     return subprocess.run(
         [bash(), posix(root / "scripts" / RUNNER.name), *command],
-        capture_output=True, text=True, cwd=posix(root), env=env, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=posix(root), env=env, timeout=60,
         check=False,
     )
 
@@ -178,3 +178,5 @@ def test_no_command_is_a_usage_error(checkout: Path):
     run = _run_in(checkout, sentinel=None)
     assert run.returncode == 2
     assert "usage" in run.stderr
+
+
