@@ -791,22 +791,8 @@ def finalize_turn(
                 review_skills=_should_review_skills,
             )
 
-    # Memory provider on_session_end()/shutdown_all() are NOT called here:
-    # run_conversation() runs once per message; CLI/gateway own session-end cleanup.
-    if not getattr(agent, "_persist_disabled", False):
-        _invoke_hook_safely(
-            "on_session_end", logger,
-            session_id=agent.session_id,
-            task_id=effective_task_id,
-            turn_id=turn_id,
-            completed=completed,
-            failed=failed,
-            interrupted=interrupted,
-            turn_exit_reason=_turn_exit_reason,
-            model=agent.model,
-            platform=_platform,
-        )
-
+    # Plugin on_session_end fires in AIAgent.run_conversation, after the run's task metrics close;
+    # memory provider on_session_end()/shutdown_all() belong to the CLI/gateway session end.
     agent._turn_preflight_display_snapshot = None
     agent._turn_received_provider_response = False
     return result
