@@ -113,7 +113,16 @@ class Pruner:
         """Over the cap on the take path: drop the oldest snapshot of every project once and
         defer the gc. One round per checkpoint converges over turns; the full loop measured
         against an unchanging pack once flattened every project to a single snapshot."""
-        if cap_bytes <= 0 or self.dir_size(self.store) <= cap_bytes:
+        if cap_bytes <= 0:
+            return False
+        # Reclaim only when the raw measurement is over cap: trim() marks .gc-pending
+        # on every chain rewrite (every take at the snapshot budget), so an
+        # unconditional reclaim paid a full git gc under the store lock on every take.
+        # Under cap the marker stays for the periodic prune; packing only shrinks
+        # dir_size, so the post-gc judgment still keeps #138039 fixed.
+        if self.gc_pending() and self.dir_size(self.store) > cap_bytes:
+            self.reclaim()
+        if self.dir_size(self.store) <= cap_bytes:
             return False
         changed = False
         for ref in self._git(["for-each-ref", "--format=%(refname)", self.refs_prefix]).splitlines():
