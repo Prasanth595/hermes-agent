@@ -4,6 +4,7 @@ Identity and lineage remain owner-reserved. This is not arbitrary SessionDB RPC.
 """
 import json
 
+from hermes_state_common import delete_unreferenced_system_prompt_hashes
 from hermes_state_runtime import RuntimeStoreError
 
 
@@ -30,9 +31,10 @@ def worker_prompt(db, conn, session_id, payload):
     if set(payload) != {'system_prompt'} or not (
             payload['system_prompt'] is None or isinstance(payload['system_prompt'], str)):
         raise RuntimeStoreError('invalid_params')
-    conn.execute('UPDATE sessions SET system_prompt_hash=?, system_prompt=NULL WHERE id=?',
-                 (db._store_system_prompt(conn, payload['system_prompt']), session_id))
-    db._delete_unreferenced_system_prompts(conn)
+    old = conn.execute('SELECT system_prompt_hash FROM sessions WHERE id=?', (session_id,)).fetchone()
+    new_hash = db._store_system_prompt(conn, payload['system_prompt'])
+    conn.execute('UPDATE sessions SET system_prompt_hash=?, system_prompt=NULL WHERE id=?', (new_hash, session_id))
+    delete_unreferenced_system_prompt_hashes(conn, (old[0] if old else None, new_hash))
     return {'value': None}
 
 
@@ -62,9 +64,10 @@ def worker_tool_names(db, conn, session_id, payload):
     encoded = None if pin is None else json.dumps(pin)
     if encoded is not None and len(encoded) > 4 * 1024 * 1024:
         raise RuntimeStoreError('invalid_params')
-    conn.execute('UPDATE sessions SET tool_names=? WHERE id=?',
-                 (db._store_system_prompt(conn, encoded), session_id))
-    db._delete_unreferenced_system_prompts(conn)
+    old = conn.execute('SELECT tool_names FROM sessions WHERE id=?', (session_id,)).fetchone()
+    new_hash = db._store_system_prompt(conn, encoded)
+    conn.execute('UPDATE sessions SET tool_names=? WHERE id=?', (new_hash, session_id))
+    delete_unreferenced_system_prompt_hashes(conn, (old[0] if old else None, new_hash))
     return {'value': None}
 
 

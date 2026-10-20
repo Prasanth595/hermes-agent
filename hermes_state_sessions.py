@@ -21,7 +21,8 @@ from hermes_state_common import (
     _shape_preview, _sql_preview_raw, QUEUED_PROMPT_METADATA_KEY,
     _sql_in_window, _sql_json_extract, _sql_session_last_active, _sql_session_last_active_by_id,
     escape_like as _escape_like, _SQL_IN_CHUNK, _id_chunks, _placeholders as _session_ids_placeholders,
-    _source_match_clause, emit_session_deleted, launch_stub_filter_sql,
+    _source_match_clause, delete_unreferenced_system_prompt_hashes, emit_session_deleted,
+    launch_stub_filter_sql,
 )
 from hermes_state_compression import _CHAIN_CAP, _UNSET_CREATED_SQL
 
@@ -693,11 +694,13 @@ class SessionSessionsMixin:
     def update_system_prompt(self, session_id: str, system_prompt: Optional[str]) -> None:
         """Store the full assembled system prompt snapshot."""
         def _do(conn):
+            old = conn.execute("SELECT system_prompt_hash FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            new_hash = self._store_system_prompt(conn, system_prompt)
             conn.execute(
                 "UPDATE sessions SET system_prompt_hash = ?, system_prompt = NULL WHERE id = ?",
-                (self._store_system_prompt(conn, system_prompt), session_id),
+                (new_hash, session_id),
             )
-            self._delete_unreferenced_system_prompts(conn)
+            delete_unreferenced_system_prompt_hashes(conn, (old[0] if old else None, new_hash))
         self._execute_write(_do)
 
     def update_session_tool_names(self, session_id: str, pin: Any) -> None:
@@ -707,9 +710,10 @@ class SessionSessionsMixin:
         (legacy rows: an inline JSON name list); ``get_session`` resolves either."""
         payload = json.dumps(pin) if pin is not None else None
         def _do(conn):
-            conn.execute("UPDATE sessions SET tool_names = ? WHERE id = ?",
-                         (self._store_system_prompt(conn, payload), session_id))
-            self._delete_unreferenced_system_prompts(conn)
+            old = conn.execute("SELECT tool_names FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            new_hash = self._store_system_prompt(conn, payload)
+            conn.execute("UPDATE sessions SET tool_names = ? WHERE id = ?", (new_hash, session_id))
+            delete_unreferenced_system_prompt_hashes(conn, (old[0] if old else None, new_hash))
         self._execute_write(_do)
 
     def update_session_model(
@@ -1797,8 +1801,11 @@ class SessionSessionsMixin:
                 "SELECT 1 FROM session_admissions WHERE target_session_id=? UNION ALL "
                 "SELECT 1 FROM worker_executions WHERE session_id=? LIMIT 1", (session_id, session_id)).fetchone():
                 return None
+            refs = conn.execute("SELECT system_prompt_hash, tool_names FROM sessions WHERE id = ?",
+                                (session_id,)).fetchone()
             conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             cur = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            delete_unreferenced_system_prompt_hashes(conn, tuple(refs or ()))
             return cur.rowcount > 0
         result = self._execute_write(_do)
         if result is None:

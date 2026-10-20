@@ -2,6 +2,7 @@
 import json
 import time
 
+from hermes_state_common import delete_unreferenced_system_prompt_hashes
 from hermes_state_runtime import RuntimeStoreError
 
 
@@ -274,7 +275,8 @@ def insert_session_row_in_transaction(
         ),
     )
     if system_prompt_hash is not None:
-        self._delete_unreferenced_system_prompts(conn)
+        # The upsert keeps an existing row's hash, so only the one just inserted can be orphaned.
+        delete_unreferenced_system_prompt_hashes(conn, (system_prompt_hash,))
     if parent_session_id:
         self._inherit_parent_session_metadata(conn, session_id)
     # The upsert may have just filled a compression tip's created_source (update_token_counts).

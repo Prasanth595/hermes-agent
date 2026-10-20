@@ -1487,6 +1487,22 @@ def fts_rebuild_admission(db_path, *, timeout_seconds=None):
             handle.close()
 
 
+def delete_unreferenced_system_prompt_hashes(conn, hashes) -> None:
+    """Delete the given ``system_prompts`` hashes that no session references any more.
+
+    ``SessionDB._delete_unreferenced_system_prompts`` checks every row of the table, inside the
+    write lock. Writes that run every turn (prompt rebuilds, tools-pin updates, session creation)
+    can only orphan the hash they replaced or the one they inserted, so they pass just those and
+    the lock is held for a few indexed point lookups. Deletes and prunes keep the full sweep."""
+    for prompt_hash in {h for h in hashes if h}:
+        conn.execute(
+            "DELETE FROM system_prompts WHERE hash = ? AND NOT EXISTS ("
+            "SELECT 1 FROM sessions WHERE system_prompt_hash = ?) AND NOT EXISTS ("
+            "SELECT 1 FROM sessions WHERE tool_names = ?)",
+            (prompt_hash, prompt_hash, prompt_hash),
+        )
+
+
 def _json_or(raw: Any, fallback: Any, warning: str) -> Any:
     """``json.loads(raw)``; on failure log *warning* and return *fallback*."""
     try:
