@@ -7,6 +7,7 @@ names the pre-update snapshot that predates the cutover.
 import sqlite3
 import subprocess
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -95,3 +96,49 @@ def test_forward_updates_and_stores_without_ledger_rows_are_never_refused(repo, 
     assert guard.downgrade_refusal(["git"], repo, head, home=ledgered) is None
     _git(repo, "checkout", "-q", "--detach", old)  # running the old release: the newer target is forward
     assert guard.downgrade_refusal(["git"], repo, head, home=ledgered) is None
+
+
+@pytest.mark.parametrize("divergent", [True, False], ids=["beside-history", "in-history"])
+def test_check_holds_a_release_that_update_would_refuse(repo, tmp_path, monkeypatch, capsys, divergent):
+    """`hermes update --check` must neither offer nor promise a move back to a release the update then
+    refuses (#139099): one cut beside this checkout's history, or one it already contains."""
+    from types import SimpleNamespace
+
+    from hermes_cli import source_releases, update_cmd_check
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr("hermes_cli.backup._sibling_profile_homes", lambda h: [])
+    release = _git(repo, "rev-parse", "old-release")
+    if divergent:
+        _git(repo, "checkout", "-q", "-b", "release-line", "old-release")
+        (repo / "notes.txt").write_text("release fix\n")
+        _git(repo, "add", "notes.txt")
+        _git(repo, "commit", "-qm", "release from the older line")
+        release = _git(repo, "rev-parse", "HEAD")
+        _git(repo, "checkout", "-q", "main")
+    target = SimpleNamespace(commit=release, retired=False, ahead=False, label="v1.2.3", branch=None,
+                             repository="NousResearch/hermes-agent")
+    monkeypatch.setattr(source_releases, "resolve_source_target", lambda *a, **k: target)
+
+    update_cmd_check.channel_compare_branch("stable", ["git"], repo)
+    # No runtime history yet: a real update, or a real rollback.
+    assert ("Selected release available" if divergent else "moves it back") in capsys.readouterr().out
+
+    _ledgered_store(home)
+    update_cmd_check.channel_compare_branch("stable", ["git"], repo)
+    out = capsys.readouterr().out
+    assert "Holding at this build" in out
+    assert "Selected release available" not in out and "moves it back" not in out
+
+
+def test_the_runtime_schema_marker_is_still_in_this_trees_state_schema():
+    """target_predates_runtime greps a release tree for this literal, so it must match the DDL as written.
+
+    If the marker drifts from hermes_state*.py (a renamed file, reformatted DDL), every later
+    forward release would read as pre-runtime: refused on --branch, and silently held on a channel.
+    """
+    root = Path(__file__).resolve().parents[2]
+    schema = [p.read_text(encoding="utf-8") for p in root.glob("hermes_state*.py")]
+    assert schema, "no hermes_state*.py next to tests/"
+    assert any(guard._RUNTIME_SCHEMA_MARKER in text for text in schema)

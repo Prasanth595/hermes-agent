@@ -288,7 +288,81 @@ def _write_cache(cache_file: Path, identity: dict, now: float, result: dict) -> 
         logger.debug("Could not cache source check: %s", exc)
 
 
-def _resolve_channel(result: dict, channel: str, co: _Checkout, *, forward_only: bool = False):
+def _github_predates_runtime(repository: str, sha: str, cache_file: Path) -> Optional[bool]:
+    """Whether release ``sha`` predates the gateway runtime, read from GitHub: the checkout has not
+    fetched it, and this check never fetches. None when GitHub cannot tell us.
+
+    One API call lists the release's root tree; the state modules come from raw.githubusercontent.com,
+    which does not spend the 60/hour anonymous API quota. A commit's tree never changes, so a definite
+    answer is cached per sha for good."""
+    from fnmatch import fnmatchcase
+
+    from hermes_cli.update_downgrade_guard import STATE_MODULES, defines_runtime
+
+    known = _read_json(cache_file)
+    known = known if isinstance(known, dict) else {}
+    if isinstance(known.get(sha), bool):
+        return known[sha]
+    tree = _quiet(lambda: json.loads(_request(f"https://api.github.com/repos/{repository}/git/trees/{sha}")))
+    entries = tree.get("tree") if isinstance(tree, dict) and not tree.get("truncated") else None
+    if not isinstance(entries, list):
+        return None
+    paths = [e["path"] for e in entries
+             if isinstance(e, dict) and e.get("type") == "blob" and fnmatchcase(str(e.get("path")), STATE_MODULES)]
+    if not paths:
+        return None  # not a hermes-agent tree we recognise: no claim either way
+    unread = []
+
+    def sources():
+        for path in paths:
+            text = _quiet(lambda: _request_with(
+                f"https://raw.githubusercontent.com/{repository}/{sha}/{quote(path)}", "*/*", None))
+            if text is None:
+                unread.append(path)
+                return
+            yield text
+    if defines_runtime(sources()):
+        verdict = False
+    elif unread:
+        return None  # a module we could not read may hold the marker
+    else:
+        verdict = True
+    try:
+        from utils import atomic_json_write
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_json_write(cache_file, {**known, sha: verdict})
+    except OSError as exc:
+        logger.debug("Could not cache the release schema verdict: %s", exc)
+    return verdict
+
+
+def _update_refuses(co: _Checkout, target: str, home: Path) -> bool:
+    """The updater's downgrade refusal, asked read-only. An embedded checkout has no git to ask."""
+    if co.embedded:
+        return False
+    from hermes_cli.update_downgrade_guard import would_refuse
+
+    def git(*args: str) -> int:
+        result = _git_run(list(args), cwd=co.root, git=co.git, text=False, timeout=20)
+        return -1 if result is None else result.returncode
+
+    def remote(sha: str) -> Optional[bool]:
+        return _github_predates_runtime(co.repository or OFFICIAL_REPOSITORY, sha,
+                                        home / "source-checks" / "release-runtime.json")
+    return would_refuse(co.root, target, home, git=git, remote=remote)
+
+
+def _hold_refused_release(result: dict, co: _Checkout, home: Path) -> None:
+    """Hold an offered release `hermes update` refuses (it predates the gateway runtime these session
+    stores use). Covers releases off this checkout's history too, which the ancestry-only rollback
+    test cannot see. Runs on cached offers as well, because the stores gain runtime history between
+    checks."""
+    target = result.get("targetSha")
+    if result.get("updateAvailable") and target and _update_refuses(co, target, home):
+        result.update(updateAvailable=False, behind=0, held="downgrade")
+
+
+def _resolve_channel(result: dict, channel: str, co: _Checkout, home: Path, *, forward_only: bool = False):
     """Resolve a release channel's target into ``result``; the SourceTarget, or None on error.
 
     A target with a pinned commit is final; one without names a branch to follow instead.
@@ -313,6 +387,7 @@ def _resolve_channel(result: dict, channel: str, co: _Checkout, *, forward_only:
         # not a new update. Local ancestry only; an unknown relation stays an update.
         result["rollback"] = bool(co.head and co.head != target and not co.embedded and _git_ok(
             ["merge-base", "--is-ancestor", target, co.head], cwd=co.root, git=co.git))
+        _hold_refused_release(result, co, home)
         if source_target.retired:
             result["retirement"] = {"destination": source_target.channel, "sourceOnly": True}
     return source_target
@@ -437,19 +512,22 @@ def check_for_updates(*, install_root: Path | None = None, home: Path | None = N
     else:
         result["branch"] = selected_branch
     identity = {"root": str(root), "home": str(home), "head": co.head, "origin": co.origin, "branch": selected_branch,
-                "channel": channel, "embedded": embedded, "branchOverride": branch is not None, "channelProtocol": 1,
+                "channel": channel, "embedded": embedded, "branchOverride": branch is not None, "channelProtocol": 2,
                 "forwardOnly": forward_only}
     cache_file = Path(cache_path) if cache_path is not None else home / "source-checks" / f"{install_id(root)}.json"
     now = time.time()
     cached = None if force else _cached_status(cache_file, identity, now)
     if cached is not None:
-        return {**cached, "dirty": co.dirty, "currentBranch": co.current_branch}
+        cached = {**cached, "dirty": co.dirty, "currentBranch": co.current_branch}
+        if cached.get("channel"):
+            _hold_refused_release(cached, co, home)
+        return cached
     result["fetchedAt"] = int(now * 1000)
     source_target = None
     if not _is_full_sha(co.head):
         result.update(error="head-unavailable", message="Could not read the installed revision.")
     elif branch is None:
-        source_target = _resolve_channel(result, channel, co, forward_only=forward_only)
+        source_target = _resolve_channel(result, channel, co, home, forward_only=forward_only)
         if source_target is not None and not source_target.commit:
             # The record supplies a default, not permission to leave the user's branch.
             selected_branch = configured_branch or _checked_out_branch(co.current_branch, source_target.branch)
