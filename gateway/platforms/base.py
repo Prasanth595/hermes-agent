@@ -426,6 +426,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.helpers import fence_state_after
+from gateway.platforms.base_clarify import format_clarify_prompt
 from gateway.platforms.base_exec_approval import (
     approval_timeout_seconds, ea_action_labels, ea_default_reason_text, ea_header_text,
     ea_reason_label_text, ea_smart_deny_line_text, format_approval_deadline_line)
@@ -2898,22 +2899,19 @@ class BasePlatformAdapter(ABC):
         ``mark_awaiting_text``. Adapters whose prompt is a persistent card MAY define
         ``async retire_clarify_card(clarify_id, notice)``; the gateway calls it when the clarify
         ends without a click (timeout, session reset, superseding free prose)."""
+        is_multi = False
         if choices:
             # Multi-select flag lives on the pending entry (signature stays adapter-compatible).
             try:
                 from tools.clarify_gateway import get_pending
-                _is_multi = bool(getattr(get_pending(clarify_id), "multi_select", False))
+                is_multi = bool(getattr(get_pending(clarify_id), "multi_select", False))
             except Exception:
-                _is_multi = False
-            hint = t("gateway.clarify.hint_multi") if _is_multi else t("gateway.clarify.hint_single")
-            numbered = [t("gateway.clarify.option_line", index=i, choice=choice)
-                        for i, choice in enumerate(choices, start=1)]
-            text = "\n".join([t("gateway.clarify.question", question=question), "", *numbered, "", hint])
+                is_multi = False
             # Text fallback: let the gateway intercept capture the typed reply.
             from tools.clarify_gateway import mark_awaiting_text
             mark_awaiting_text(clarify_id)
-        else:
-            text = t("gateway.clarify.question", question=question)
+        # One shared formatter renders this text prompt and the origin relay's question (#103209).
+        text = format_clarify_prompt(question, choices, multi_select=is_multi)
         return await self.send(chat_id=chat_id, content=text, metadata=metadata)
 
     async def send_private_notice(
