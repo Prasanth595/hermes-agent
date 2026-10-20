@@ -1493,7 +1493,7 @@ export function ChatBar({
                     readLiveText={syncDraftFromEditor}
                   />
                   <VoiceActivity state={voiceActivityState} />
-                  <VoicePlaybackActivity />
+                  <VoicePlaybackActivity sessionId={sessionId} />
                   {queueEdit && editingQueuedPrompt && <QueuedEditBanner onExit={exitQueuedEdit} />}
                   {attachments.length > 0 && <AttachmentList attachments={attachments} onRemove={onRemoveAttachment} />}
                   <div
