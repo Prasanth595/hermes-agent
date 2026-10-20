@@ -8,6 +8,7 @@ test patches on ``update_cmd`` stay effective).
 import logging
 from contextlib import suppress
 import os
+import shlex
 import subprocess
 import sys
 import time as _time
@@ -916,6 +917,76 @@ def _print_checkpoint_footprint_notice() -> None:
         print(f"\n\033[1;33mℹ  {notice}\033[0m")
 
 
+def _notice_legacy_managed_uv() -> None:
+    """Name the pre-PM ``uv``/``uvx`` a legacy install left in each home's ``bin``.
+
+    Notice only — never an unattended delete: shape identifies uv but the old
+    installer wrote no receipt, so the copy in ``bin`` might be the user's own.
+    The explicit migration is ``hermes doctor --fix`` (which explains exactly
+    that). Runs only once PM's store carries its own uv (until then the legacy
+    binary is the install's only uv) and only where an anchored fix exists;
+    every home is walked, including a custom ``HERMES_HOME`` ``list_profiles()``
+    never enumerates.
+
+    This walks every profile, while ``doctor --fix`` acts on the one home its
+    run resolved, so a leftover elsewhere needs ``hermes -p X doctor``.
+
+    ``automatic_cleanup()`` decides only whether the advice names an automatic fix;
+    it must not decide whether the user is told. On Windows there is no
+    directory-relative deletion, so the remedy there is manual — but the shadow is
+    just as real, and a silent update leaves it undiscoverable (#101269).
+    """
+    import pm
+    from hermes_constants import get_hermes_home
+    from hermes_cli.profiles import list_profiles
+    from hermes_cli.legacy_uv import (
+        automatic_cleanup, LEGACY_MANAGED_UV_NAMES, REMOVABLE, bin_escapes_home,
+        classify_leftover,
+    )
+
+    # PM's own uv must exist first: until then the legacy copy is this install's only
+    # uv, and naming it would invite the user to delete their toolchain.
+    try:
+        if not pm.is_installed("uv"):
+            return
+    except Exception:  # health: allow BLE001 -- a notice must never fail the update tail
+        return  # a readable-answer-only notice must never fail the update tail
+    auto = automatic_cleanup()
+    profiles = list_profiles(lazy_skill_count=True)
+    homes = {profile.path: profile.name for profile in profiles}
+    homes[get_hermes_home()] = None
+    for home in sorted(homes, key=lambda h: str(h)):
+        if bin_escapes_home(home):
+            continue
+        found = [
+            name for name in LEGACY_MANAGED_UV_NAMES
+            if classify_leftover(home / "bin" / name) == REMOVABLE
+        ]
+        if found:
+            # Doctor checks ONE home (its own HERMES_HOME), so an unscoped
+            # "--fix" leaves a leftover named here untouched. Scope the advice to
+            # the home it was found in.
+            name = homes[home]
+            scoped = (f"hermes -p {name}" if name
+                      else f"HERMES_HOME={shlex.quote(str(home))} hermes")
+            if auto:
+                remedy = (f"run `{scoped} doctor --fix` to remove them, or keep them if "
+                          f"they are yours")
+            else:
+                # No anchored deletion on this platform: name the files and say so,
+                # rather than implying a --fix that can only print this again.
+                remedy = (
+                    f"automatic cleanup is not performed on this platform — delete "
+                    f"{', '.join(found)} from {home}/bin by hand (or keep them if they "
+                    f"are yours); `{scoped} doctor` reports them until then"
+                )
+            print(
+                f"\n\033[1;33m⚠  Pre-PM uv binaries in {home}/bin ({', '.join(found)}) shadow "
+                f"your own uv. Hermes cannot prove it installed them, so they are left in "
+                f"place — {remedy}.\033[0m"
+            )
+
+
 def _print_post_update_notices_and_self_heals() -> None:
     """Best-effort notices (FTS optimize, curator) and self-heals (FHS PATH, ACP launcher,
     Windows bin launchers, cua-driver refresh) that run after the summary."""
@@ -936,6 +1007,7 @@ def _print_post_update_notices_and_self_heals() -> None:
         ('FHS PATH guard check failed: %s', _ensure_fhs_path_guard),
         ('CLI launcher exposure failed: %s', lambda: _launchers.expose_cli(_m().PROJECT_ROOT)),
         ('Windows bin launcher migration failed: %s', _migrate_windows_bin_path),
+        ('Legacy uv migration notice failed: %s', _notice_legacy_managed_uv),
         ('cua-driver refresh failed: %s', _refresh_cua_driver_after_update),
         ('Default PM tool install failed: %s', _install_default_tools_after_update),
         ('Checkpoint footprint notice failed: %s', _print_checkpoint_footprint_notice),
