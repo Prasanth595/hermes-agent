@@ -17,8 +17,7 @@ import {
   getRecommendedDefaultModel,
   saveHermesConfig,
   saveMoaModels,
-  setEnvVar,
-  setModelAssignment
+  setEnvVar
 } from '@/hermes'
 import type {
   AuxiliaryModelsResponse,
@@ -36,7 +35,7 @@ import { catalogProviderMatches, findCatalogProvider } from '@/lib/model-options
 import { composerServiceTier } from '@/lib/model-status-label'
 import { cn } from '@/lib/utils'
 import { $customModels, withCustomModels } from '@/store/custom-models'
-import { setMainModelAssignment } from '@/store/model-assignment'
+import { setGuardedModelAssignment, setMainModelAssignment } from '@/store/model-assignment'
 import { notify, notifyError, readableError } from '@/store/notifications'
 import { startManualLocalEndpoint, startManualOnboarding, startManualProviderOAuth } from '@/store/onboarding'
 
@@ -948,7 +947,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
       setError('')
 
       try {
-        await setModelAssignment({ ...route, scope: 'auxiliary', task }, scopeProfile)
+        await setGuardedModelAssignment({ ...route, scope: 'auxiliary', task }, scopeProfile)
         await refresh()
       } catch (err) {
         setCaughtError(err, m.loadFailed)
@@ -969,7 +968,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
       setError('')
 
       try {
-        await setModelAssignment(
+        await setGuardedModelAssignment(
           {
             model: auxDraft.model,
             provider: auxDraft.provider,
@@ -1015,7 +1014,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
     setError('')
 
     try {
-      await setModelAssignment(
+      await setGuardedModelAssignment(
         {
           model: mainModel.model,
           provider: mainModel.provider,
