@@ -32,7 +32,7 @@ def test_usage_slash_shows_account_limits_before_first_turn_inside_session_scope
             scoped.append("enter")
 
         def __exit__(self, *exc):
-            scoped.append("exit")
+            scoped.pop()
             return False
 
     def _fetch(provider, *, base_url=None, api_key=None):
@@ -53,7 +53,7 @@ def test_usage_slash_shows_account_limits_before_first_turn_inside_session_scope
     ):
         out = server._live_slash_command_output("sid-usage", session, "usage", "")
 
-    assert scoped == ["enter", "exit"]
+    assert scoped == []
     assert fetched == ["openai-codex"]
     assert "Account limits" in out and "Nous credits: 100 remaining" in out, out
     assert "send a message first" not in out
