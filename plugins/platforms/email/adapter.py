@@ -920,14 +920,14 @@ class EmailAdapter(BasePlatformAdapter):
         """One email per batch: local files attached, URL images linked in the body (no remote download); base-class fallback on failure."""
         if not images:
             return SendResult(success=False, error="no images to send")
-        from urllib.parse import unquote as _unquote
+        from gateway.platforms.helpers import local_path_from_file_url
         body_parts, local_paths = [], []
         for image_url, alt_text in images:
             if alt_text:
                 body_parts.append(alt_text)
             if not image_url.startswith("file://"):
                 body_parts.append(t("platform.email.image_line", url=image_url))  # parity with send_image
-            elif Path(local_path := _unquote(image_url[7:])).exists():
+            elif await asyncio.to_thread(Path(local_path := local_path_from_file_url(image_url)).exists):
                 local_paths.append(local_path)
             else:
                 logger.warning("[Email] Skipping missing image: %s", local_path)

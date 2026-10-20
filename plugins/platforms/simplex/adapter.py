@@ -22,7 +22,7 @@ from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from urllib.parse import unquote
+from urllib.parse import quote
 
 from gateway.platforms._shared import (
     decode_json_list_literal as _decode_json_list_literal, get_scoped_secret as _get_scoped_secret,
@@ -31,7 +31,7 @@ from gateway.platforms._shared import (
 from gateway.config import Platform, PlatformConfig
 from hermes_constants import hermes_home_key
 from gateway.platforms.base import BasePlatformAdapter, SendResult, cache_image_from_url
-from gateway.platforms.helpers import cancel_task
+from gateway.platforms.helpers import cancel_task, local_path_from_file_url
 from gateway.platforms.event import MessageEvent, MessageType
 
 logger = logging.getLogger(__name__)
@@ -554,7 +554,7 @@ class SimplexAdapter(BasePlatformAdapter):
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, **kwargs) -> SendResult:
         """Send an image. Supports ``file://`` URLs and ``http(s)://`` URLs."""
         if image_url.startswith("file://"):
-            file_path = unquote(image_url[7:])
+            file_path = local_path_from_file_url(image_url)
         else:
             try:
                 file_path = await cache_image_from_url(image_url)
@@ -574,7 +574,7 @@ class SimplexAdapter(BasePlatformAdapter):
 
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
                               reply_to: Optional[str] = None, **kwargs) -> SendResult:
-        return await self.send_image(chat_id, f"file://{image_path}", caption=caption, **kwargs)
+        return await self.send_image(chat_id, f"file://{quote(image_path)}", caption=caption, **kwargs)
 
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, **kwargs) -> SendResult:

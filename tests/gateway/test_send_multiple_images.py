@@ -13,6 +13,7 @@ Signal's native implementation is covered by test_signal.py.
 """
 
 import asyncio
+import os
 import sys
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -157,6 +158,28 @@ class TestDiscordMultiImage:
         a._client = MagicMock()
         return a
 
+    @pytest.mark.platforms("windows")
+    def test_windows_drive_file_uri_is_uploaded(self, adapter, tmp_path, monkeypatch):
+        """``file:///C:/...`` used to decode to ``/C:/...`` and be skipped as missing."""
+        image = tmp_path / "shot one.png"
+        image.write_bytes(b"\x89PNG" + b"\x00" * 20)
+        assert image.as_uri()[9:11] == ":/"  # file:///C:/
+        opened = []
+        monkeypatch.setattr(
+            sys.modules["discord"], "File",
+            lambda fp, filename=None: opened.append((fp, filename)) or MagicMock(),
+        )
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock(return_value=MagicMock(id=1))
+        adapter._client.get_channel = MagicMock(return_value=mock_channel)
+        adapter._is_forum_parent = MagicMock(return_value=False)
+
+        result = _run(adapter.send_multiple_images("67890", [(image.as_uri(), "")]))
+
+        assert result.success
+        assert len(opened) == 1 and os.path.samefile(opened[0][0], image)
+        assert opened[0][1] == image.name
+        mock_channel.send.assert_awaited_once()
 
     def test_url_batch_follows_safe_redirect_location_header(self, adapter, monkeypatch):
         """Redirect handling preserves aiohttp's case-insensitive Location behavior."""

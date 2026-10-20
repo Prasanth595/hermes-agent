@@ -19,7 +19,7 @@ from contextlib import suppress
 from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 import httpx
 
@@ -30,7 +30,7 @@ from gateway.platforms.base import (
     cache_audio_from_bytes_async, cache_document_from_bytes_async, cache_image_from_url, utf16_len,
 )
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
-from gateway.platforms.helpers import redact_phone
+from gateway.platforms.helpers import local_path_from_file_url, redact_phone
 from gateway.platforms.helpers import cancel_task
 from gateway.platforms.media_cache import mime_for_ext
 from tools.audio_container import CONTAINER_TO_EXT, sniff_container
@@ -765,7 +765,7 @@ class SignalAdapter(BasePlatformAdapter):
     async def _resolve_image_path(self, image_url: str) -> tuple[Optional[str], Optional[str], Any]:
         """``(path, None, None)`` or ``(None, reason, detail)``: reason download (exc) / missing / oversize (size)."""
         if image_url.startswith("file://"):
-            file_path = unquote(image_url[7:])
+            file_path = local_path_from_file_url(image_url)
         else:
             try:
                 file_path = await cache_image_from_url(image_url)

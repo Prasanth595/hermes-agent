@@ -278,6 +278,18 @@ def redact_phone(phone: str) -> str:
     return phone[:4] + "****" + phone[-4:]
 
 
+def local_path_from_file_url(url: str) -> str:
+    """Local path for an outbound ``file://`` image URL.
+
+    Accepts the gateway's own ``file://{quote(path)}`` form and drive-letter file URIs: on Windows
+    ``Path.as_uri()`` gives ``file:///C:/...``, and stripping the scheme then unquoting would leave
+    ``/C:/...``, which is not a path. The UNC host form ``file://server/share/...`` is not
+    supported, as before. ``url2pathname`` drops a ``?query`` or ``#fragment``, so callers
+    percent-encode the path (both forms above do)."""
+    from urllib.request import url2pathname
+    return url2pathname(url[len("file://"):])
+
+
 # ─── GFM table → bullets. Discord calls convert_table_to_bullets(); Telegram imports the
 # primitives but keeps its own MarkdownV2-aware renderer.
 # Delimiter row: optional outer pipes, dash cells (optional alignment colons). Requires at

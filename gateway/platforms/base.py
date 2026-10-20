@@ -2965,8 +2965,8 @@ class BasePlatformAdapter(ABC):
                 logger.info("[%s] Sending image: %s (alt=%s)", self.name,
                             safe_url_for_log(image_url), alt_text[:30] if alt_text else "")
                 if image_url.startswith("file://"):
-                    from urllib.request import url2pathname
-                    sender, url_kw = self.send_image_file, {"image_path": url2pathname(image_url[7:])}
+                    from gateway.platforms.helpers import local_path_from_file_url
+                    sender, url_kw = self.send_image_file, {"image_path": local_path_from_file_url(image_url)}
                 elif self._is_animation_url(image_url):
                     sender, url_kw = self.send_animation, {"animation_url": image_url}
                 else:

@@ -2987,7 +2987,7 @@ class SlackAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="no images to send")
         chat_id = await self._dm_target(chat_id, metadata)
         try:
-            from urllib.parse import unquote as _unquote
+            from gateway.platforms.helpers import local_path_from_file_url
             from tools.url_safety import create_ssrf_safe_async_client, is_safe_url as _is_safe_url
         except Exception:
             return await super().send_multiple_images(chat_id, images, metadata, human_delay)
@@ -3000,7 +3000,7 @@ class SlackAdapter(BasePlatformAdapter):
                 await asyncio.sleep(human_delay)
             try:
                 file_uploads, initial_comment_parts = await self._collect_image_uploads(
-                    chunk, _unquote, _is_safe_url, create_ssrf_safe_async_client)
+                    chunk, local_path_from_file_url, _is_safe_url, create_ssrf_safe_async_client)
                 if not file_uploads:
                     continue
                 initial_comment = "\n".join(initial_comment_parts) if initial_comment_parts else ""
@@ -3023,7 +3023,7 @@ class SlackAdapter(BasePlatformAdapter):
 
     @staticmethod
     async def _collect_image_uploads(
-        chunk: list[tuple[str, str]], unquote_fn, is_safe_url_fn, client_factory
+        chunk: list[tuple[str, str]], file_url_path_fn, is_safe_url_fn, client_factory
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """``files_upload_v2`` entries for one batch: ``file://`` by path, remote via the SSRF-safe
         client (unsafe/failed skipped). Returns ``(file_uploads, alt_texts)``."""
@@ -3036,7 +3036,7 @@ class SlackAdapter(BasePlatformAdapter):
                 if alt_text:
                     initial_comment_parts.append(alt_text)
                 if image_url.startswith("file://"):
-                    local_path = unquote_fn(image_url[7:])
+                    local_path = file_url_path_fn(image_url)
                     if not os.path.exists(local_path):
                         logger.warning("[Slack] Skipping missing image: %s", local_path)
                         continue

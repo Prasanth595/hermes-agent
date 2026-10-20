@@ -215,6 +215,19 @@ async def test_send_image_reports_thumbnail_preparation_failure(tmp_path, monkey
     adapter._send_items.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_send_image_file_keeps_hash_and_percent_in_the_filename(tmp_path):
+    adapter = _adapter_with_ws()
+    image_path = tmp_path / "shot #1 a%20b.png"
+    image_path.write_bytes(b"png")
+    adapter._prepare_image = MagicMock(return_value=(str(image_path), "data:image/png;base64,"))
+    adapter._send_items = AsyncMock(return_value=MagicMock(success=True))
+
+    await adapter.send_image_file("contact-42", str(image_path))
+
+    adapter._prepare_image.assert_called_once_with(str(image_path))
+
+
 # ---------------------------------------------------------------------------
 # 7b. Channel directory enumeration (list_channels)
 # ---------------------------------------------------------------------------

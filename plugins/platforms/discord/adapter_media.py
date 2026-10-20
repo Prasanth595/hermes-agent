@@ -144,7 +144,7 @@ class DiscordMediaMixin:
         try:
             import discord as _discord_mod
             import io as _io
-            from urllib.parse import unquote as _unquote
+            from gateway.platforms.helpers import local_path_from_file_url
         except Exception:  # pragma: no cover
             return await super().send_multiple_images(chat_id, images, metadata, human_delay)
         try:
@@ -170,7 +170,7 @@ class DiscordMediaMixin:
                     if alt_text:
                         captions.append(alt_text)
                     if image_url.startswith("file://"):
-                        local_path = _unquote(image_url[7:])
+                        local_path = local_path_from_file_url(image_url)
                         if not os.path.exists(local_path):
                             logger.warning("[%s] Skipping missing image: %s", self.name, local_path)
                             continue
