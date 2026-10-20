@@ -657,6 +657,9 @@ class Task:
     block_kind: Optional[str] = None
     block_recurrences: int = 0               # unblock-loop counter, see BLOCK_RECURRENCE_LIMIT
     completion_contract: Optional[str] = None
+    # Manual lane position read by ``order_by="manual"`` (see SCHEMA_SQL);
+    # 0 = never reordered, ties fall back to created_at. Display-only.
+    sort_order: int = 0
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Task:
@@ -675,6 +678,7 @@ class Task:
             skills=skills_value,
             goal_mode=bool(g("goal_mode")),
             block_recurrences=int(g("block_recurrences") or 0),
+            sort_order=int(g("sort_order") or 0),
         )
 
 
@@ -893,7 +897,15 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- ``blocked`` so a cron can't spin it forever. Reset to 0 only on a
     -- successful completion — NOT on unblock (resetting on unblock is exactly
     -- the amnesia that let the loop run unbounded).
-    block_recurrences    INTEGER NOT NULL DEFAULT 0
+    block_recurrences    INTEGER NOT NULL DEFAULT 0,
+    -- Manual position within the task's lane, lowest first, written by
+    -- ``reorder_task()`` (``hermes kanban reorder``) and read by
+    -- ``list_tasks(order_by="manual")``. 0 for every row that was never
+    -- reordered, so equal values fall back to ``created_at ASC, id ASC`` and
+    -- no existing ordering changes until a caller actually reorders something.
+    -- Display-only: the dispatcher still claims by ``priority DESC,
+    -- created_at ASC``.
+    sort_order           INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS task_links (
@@ -1423,52 +1435,6 @@ def get_task(conn: sqlite3.Connection, task_id: str) -> Optional[Task]:
     return Task.from_row(row) if row else None
 
 
-# Canonical sort-order mappings for ``hermes kanban list --sort``.
-# Each value is a raw SQL fragment appended after ``ORDER BY``.
-VALID_SORT_ORDERS: dict[str, str] = {
-    "created": "created_at ASC, id ASC",
-    "created-desc": "created_at DESC, id DESC",
-    "priority": "priority DESC, created_at ASC",
-    "priority-desc": "priority ASC, created_at ASC",
-    "status": "status ASC, created_at ASC",
-    "assignee": "assignee ASC, created_at ASC",
-    "title": "title ASC, id ASC",
-    "updated": "started_at DESC NULLS LAST, created_at DESC",
-    "completed-desc": "completed_at DESC NULLS LAST, id DESC",
-}
-
-
-def list_tasks(
-    conn: sqlite3.Connection, *, assignee: Optional[str] = None, status: Optional[str] = None,
-    tenant: Optional[str] = None, session_id: Optional[str] = None, include_archived: bool = False,
-    limit: Optional[int] = None, order_by: Optional[str] = None,
-    workflow_template_id: Optional[str] = None, current_step_key: Optional[str] = None,
-) -> list[Task]:
-    if status is not None and status not in VALID_STATUSES:
-        raise ValueError(f"status must be one of {sorted(VALID_STATUSES)}")
-    query = "SELECT * FROM tasks WHERE 1=1"
-    params: list[Any] = []
-    for col, val in (
-        ("assignee", _canonical_assignee(assignee)), ("status", status), ("tenant", tenant),
-        ("session_id", session_id), ("workflow_template_id", workflow_template_id),
-        ("current_step_key", current_step_key),
-    ):
-        if val is not None:
-            query += f" AND {col} = ?"
-            params.append(val)
-    if not include_archived and status != "archived":
-        query += " AND status != 'archived'"
-    if order_by is not None:
-        order_by = order_by.strip().lower()
-        if order_by not in VALID_SORT_ORDERS:
-            raise ValueError(f"order_by must be one of {sorted(VALID_SORT_ORDERS.keys())}")
-        query += f" ORDER BY {VALID_SORT_ORDERS[order_by]}"
-    else:
-        query += " ORDER BY priority DESC, created_at ASC"
-    if limit:
-        query += f" LIMIT {int(limit)}"
-    rows = conn.execute(query, params).fetchall()
-    return [Task.from_row(r) for r in rows]
 
 
 def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) -> bool:
@@ -4221,6 +4187,12 @@ def current_run_started_ats(conn: sqlite3.Connection, task_ids: Iterable[str]) -
 
 
 # --- Split modules (imported at the tail: they import this module as ``_kb``) ---
+from hermes_cli.kanban_db_ordering import (
+    VALID_SORT_ORDERS,
+    _MANUAL_ORDER_STRIDE,
+    list_tasks,
+    reorder_task,
+)
 from hermes_cli.kanban_db_boards import (
     _default_board_display_name,
     _dir_holds_board,
