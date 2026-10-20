@@ -3564,6 +3564,24 @@ export interface SessionCorrectionResult {
   text: string
 }
 export type CorrectionStatus = 'queued' | 'redirected' | 'rejected'
+export interface SessionSteerClearParams {
+  session_id: string
+  profile?: string | null
+}
+export interface SessionSteerClearResult {
+  status: SteerClearStatus
+  cleared: boolean
+}
+export type SteerClearStatus = 'cleared' | 'noop'
+export interface SessionPendingParams {
+  session_id: string
+  profile?: string | null
+}
+export interface SessionPendingResult {
+  steer?: string | null
+  queue?: string[]
+  redirect?: string | null
+}
 export interface SpawnTreeSaveParams {
   profile?: string | null
   subagents: Record<string, unknown>[]
@@ -5091,6 +5109,7 @@ export interface CanonicalCorrectionAck {
   text: string
   execution_generation: number
   authority_epoch: number
+  pending?: 'steer' | 'redirect' | null
 }
 /** A bare stop phrase typed while the session's voice chat is on: the chat ended, nothing was admitted (TUI-26). */
 export interface CanonicalVoiceStopped {
@@ -6357,6 +6376,8 @@ export interface RpcMethods {
   'session.list': { params: SessionListParams; result: SessionListResult }
   /** Most recent human-facing session; errors fold into a null session_id. */
   'session.most_recent': { params: SessionMostRecentParams; result: SessionMostRecentResult }
+  /** Snapshot of the pending steer plus every queued prompt (TUI pending strip / reconnect rebuild). */
+  'session.pending': { params: SessionPendingParams; result: SessionPendingResult }
   /** Redirect the active turn (queued for the next turn while the agent is still building). */
   'session.redirect': { params: SessionCorrectionParams; result: SessionCorrectionResult }
   /** Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild. */
@@ -6369,6 +6390,8 @@ export interface RpcMethods {
   'session.status': { params: SessionStatusParams; result: SessionStatusResult }
   /** Inject text into the next tool result without interrupting the turn. */
   'session.steer': { params: SessionCorrectionParams; result: SessionCorrectionResult }
+  /** Drop a pending /steer that has not been injected yet (TUI queue-strip delete). */
+  'session.steer_clear': { params: SessionSteerClearParams; result: SessionSteerClearResult }
   /** Read or set a live session's title; a title set before the row exists is queued. */
   'session.title': { params: SessionTitleParams; result: SessionTitleResult }
   /** Drop the last user turn (and everything after it) from an idle session. */
@@ -6679,12 +6702,14 @@ export const RPC_METHODS = [
   'session.interrupt',
   'session.list',
   'session.most_recent',
+  'session.pending',
   'session.redirect',
   'session.resume',
   'session.save',
   'session.set_hidden',
   'session.status',
   'session.steer',
+  'session.steer_clear',
   'session.title',
   'session.undo',
   'session.usage',
