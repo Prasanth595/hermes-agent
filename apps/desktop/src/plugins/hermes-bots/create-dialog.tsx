@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
   DisclosureCaret,
+  gatewayActivationEpoch,
   GlyphSpinner,
   host,
   Input,
@@ -44,10 +45,11 @@ import { isBackfilledFacePng } from './avatar-image'
 import { AvatarPicker } from './avatar-picker'
 import { $selectedBot } from './bot-state'
 import { createCanonicalChat } from './canonical-chat'
-import { groupCreationSource, groupExecutionMode } from './canonical-group-capabilities'
+import { groupCreationSource, groupExecutionMode, groupSeatableProfiles } from './canonical-group-capabilities'
 import { registerCanonicalGroup } from './canonical-group-registry'
 import type { CanonicalGroupOrigin } from './canonical-group-registry'
-import { canonicalGroupRequest, captureCanonicalGroupRoute, createCanonicalGroup } from './canonical-groups'
+import { canonicalGroupRequest, createCanonicalGroup } from './canonical-groups'
+import type { CanonicalGroupRoute } from './canonical-groups'
 import { $botMeta, botHandle, botRosterKey, filterBots, ROSTER_KEY, saveBotMeta } from './data'
 import { labeled, ResizableFrame } from './dialog-parts'
 import { GROUP_CHAT_MAX_MEMBERS, mintGroupRoomId, uniqueGroupChatName, updateGroupChat } from './group-chat'
@@ -122,6 +124,50 @@ interface CreateAgentDialogProps {
   roster: RosterRow[]
 }
 
+type CapabilityPicks = Pick<ProfileConfigurePayload, 'disabled_skills' | 'enabled_mcp_servers' | 'enabled_toolsets'>
+
+/** The `profiles.configure` fields for the Advanced-tab picks the user changed. */
+function capabilityPayload(
+  caps: CapabilityCatalog | null,
+  dirty: { mcp: boolean; skills: boolean; toolsets: boolean }
+): CapabilityPicks {
+  const payload: CapabilityPicks = {}
+
+  if (!caps) {
+    return payload
+  }
+
+  if (dirty.skills) {
+    payload.disabled_skills = caps.skills.filter(s => !s.enabled).map(s => s.name)
+  }
+
+  if (dirty.toolsets) {
+    const en = caps.toolsets.filter(t => t.enabled)
+    payload.enabled_toolsets = en.length === caps.toolsets.length || en.length === 0 ? [] : en.map(t => t.name)
+  }
+
+  if (dirty.mcp) {
+    payload.enabled_mcp_servers = caps.mcp.filter(m => m.enabled).map(m => m.name)
+  }
+
+  return payload
+}
+
+/** Delete a draft profile the New Agent dialog minted: on the remote target it
+ *  was created on (`cli.exec`), else locally. Fire-and-forget with a toast. A
+ *  cancel while profiles.create is still in flight is caught by that flight
+ *  itself (the dialog's draftGenRef), since the draft is only recorded once the
+ *  RPC returns (#141623). */
+function discardDraftProfile(draft: string, remoteRequest: null | ((method: string, params: Record<string, unknown>) => Promise<unknown>)) {
+  const discard = remoteRequest
+    ? remoteRequest('cli.exec', { argv: ['profile', 'delete', draft, '--yes'] })
+    : deleteBot({ name: draft })
+
+  void Promise.resolve(discard)
+    .then(() => host.notify({ kind: 'success', message: `Draft agent "${draft}" discarded` }))
+    .catch(err => host.notifyError(err, `Could not clean up draft profile "${draft}"`))
+}
+
 /** The live Capabilities surface needs a real profile. Materialize it whenever
  *  the tab is showing a valid, untaken name that has no draft yet, not only on
  *  the tab click: a user who opens the tab first and names the bot after (or
@@ -189,6 +235,7 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
   // button + MCP setup buttons). Distinct from createdRef on purpose:
   // createdRef must stay a slug string for its sibling consumers.
   const flightRef = useRef<Promise<null | string> | null>(null)
+  const draftGenRef = useRef(0) // bumped per discard: an in-flight create then deletes its own draft
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   // Default shapes mode: deterministic blob face drawn from the agent's name
@@ -286,38 +333,15 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
       )
     : roster.some(b => !b.remoteSource && b.name === slug && b.name !== createdRef.current)
 
-  // Draft semantics for the lazily-created profile: opening the Capabilities
-  // tab (or running MCP setup) materializes the profile so the LIVE config
-  // surfaces have a real backend to write to — but until the user hits
-  // Create Agent it is a DRAFT. Cancelling the dialog deletes it, so
-  // preconfigure-then-back-out leaves zero residue. Best-effort and
-  // fire-and-forget: a failed cleanup surfaces a toast, never blocks close.
+  // Opening Capabilities (or MCP setup) materializes a DRAFT profile so the live
+  // config surfaces have a backend; cancelling deletes it (discardDraftProfile).
+  const removeDraftProfile = (draft: string) => discardDraftProfile(draft, remoteTarget ? requestForTarget : null)
+
   const discardDraft = () => {
     const draft = createdRef.current
-
-    if (!draft) {
-      return
-    }
-
-    createdRef.current = null
-    flightRef.current = null
-
-    const discard = remoteTarget
-      ? requestForTarget('cli.exec', {
-          argv: ['profile', 'delete', draft, '--yes']
-        })
-      : deleteBot({
-          name: draft
-        })
-
-    void Promise.resolve(discard)
-      .then(() =>
-        host.notify({
-          kind: 'success',
-          message: `Draft agent "${draft}" discarded`
-        })
-      )
-      .catch(err => host.notifyError(err, `Could not clean up draft profile "${draft}"`))
+    draftGenRef.current += 1
+    createdRef.current = flightRef.current = null
+    draft && removeDraftProfile(draft)
   }
 
   const reset = () => {
@@ -452,6 +476,8 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
       return Promise.resolve(null)
     }
 
+    const generation = draftGenRef.current
+
     const flight = singleFlight(flightRef, async () => {
       await requestForTarget('profiles.create', {
         name: slug,
@@ -480,28 +506,20 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
             }
           : {})
       })
+
+      // Discarded mid-create: delete the profile this flight minted, configure nothing.
+      if (generation !== draftGenRef.current) {
+        removeDraftProfile(slug)
+
+        return null
+      }
+
       createdRef.current = slug
 
       // Apply capability picks from the Advanced tabs (best-effort; the
       // profile exists either way and Edit Profile can finish the job).
       try {
-        const capPayload: Pick<
-          ProfileConfigurePayload,
-          'disabled_skills' | 'enabled_mcp_servers' | 'enabled_toolsets'
-        > = {}
-
-        if (dirtyCaps.skills && caps) {
-          capPayload.disabled_skills = caps.skills.filter(s => !s.enabled).map(s => s.name)
-        }
-
-        if (dirtyCaps.toolsets && caps) {
-          const en = caps.toolsets.filter(t => t.enabled)
-          capPayload.enabled_toolsets = en.length === caps.toolsets.length || en.length === 0 ? [] : en.map(t => t.name)
-        }
-
-        if (dirtyCaps.mcp && caps) {
-          capPayload.enabled_mcp_servers = caps.mcp.filter(m => m.enabled).map(m => m.name)
-        }
+        const capPayload = capabilityPayload(caps, dirtyCaps)
 
         if (Object.keys(capPayload).length) {
           await requestForTarget('profiles.configure', {
@@ -1180,14 +1198,57 @@ interface CreateGroupChatDialogProps {
   roster: RosterRow[]
 }
 
-/** Discord-style group chat creation: pick 2+ bots via checkboxes (with
- *  search), name the group, create. Assignment appends to each local bot's
- *  group membership list, so the room appears in the roster and syncs
- *  cross-machine via ui_meta without replacing its other groups. */
+type GroupCapabilityState = {
+  activationEpoch: number
+  mode: ReturnType<typeof groupExecutionMode>
+  seatable: null | Set<string>
+  source: string
+}
+
+async function revalidateGroupCreationMode(
+  route: CanonicalGroupRoute,
+  capability: GroupCapabilityState | null,
+  source: string,
+  unavailableMessage: string
+) {
+  const sourceCurrent = groupCreationSource(route, capability?.activationEpoch ?? -1)
+
+  if (!capability || capability.source !== source || !sourceCurrent()) {
+    throw new Error(unavailableMessage)
+  }
+
+  const mode = capability.mode
+
+  if (mode !== 'canonical' && mode !== 'legacy') {
+    throw new Error(unavailableMessage)
+  }
+
+  const freshMode = groupExecutionMode(await canonicalGroupRequest<unknown>(route, 'groups.capabilities'))
+
+  if (!sourceCurrent() || freshMode !== mode) {
+    throw new Error(unavailableMessage)
+  }
+
+  return { mode, sourceCurrent }
+}
+
+/** Discord-style group chat creation: pick 2+ routable bots via checkboxes
+ *  (with search), name the group, create. Legacy assignments append to each
+ *  local bot's group membership list and sync through ui_meta; canonical groups
+ *  keep members on their authority connection. */
 export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: CreateGroupChatDialogProps) {
   const { t } = useI18n()
   const b = useBots()
   const allMeta: Record<string, BotMeta> = useValue($botMeta)
+  const connectionId = useValue(host.state.connectionId)
+  const profile = useValue(host.state.profile)
+  const gateway = useValue(host.state.gateway)
+  const activationEpoch = gatewayActivationEpoch()
+  const source = JSON.stringify([connectionId, profile, gateway, activationEpoch])
+  const observedRoute = connectionId ? { connectionId, profile } : null
+
+  const [capability, setCapability] = useState<GroupCapabilityState | null>(null)
+
   const [query, setQuery] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [name, setName] = useState('')
@@ -1203,9 +1264,78 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
     }
   }, [open])
 
+  useEffect(() => {
+    let cancelled = false
+    setCapability(null)
+
+    if (!open || gateway !== 'open' || !connectionId) {
+      return
+    }
+
+    const route = { connectionId, profile }
+    const sourceCurrent = groupCreationSource(route, activationEpoch)
+
+    void canonicalGroupRequest<unknown>(route, 'groups.capabilities')
+      .then(result => {
+        if (!cancelled && sourceCurrent()) {
+          setCapability({
+            activationEpoch,
+            mode: groupExecutionMode(result),
+            seatable: groupSeatableProfiles(result),
+            source
+          })
+        }
+      })
+      .catch(() => {
+        if (!cancelled && sourceCurrent()) {
+          setCapability({
+            activationEpoch,
+            mode: 'unavailable',
+            seatable: null,
+            source
+          })
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [activationEpoch, connectionId, gateway, open, profile, source])
+
+  const mode = capability?.source === source ? capability.mode : 'checking'
+  const seatable = capability?.source === source ? capability.seatable : null
+
+  const currentConnection = String(connectionId || '').trim()
+
+  const belongsToCurrentConnection = (bot: RosterRow) => {
+    if (!currentConnection) {
+      return false
+    }
+
+    if (bot.connectionId) {
+      return bot.connectionId === currentConnection &&
+        (!bot.route?.connectionId || bot.route.connectionId === currentConnection)
+    }
+
+    return !bot.remoteSource && (!bot.route?.connectionId || bot.route.connectionId === currentConnection)
+  }
+
   // An outage placeholder preserves one selected owner's identity in the
   // sidebar, but it is not a routable room member. Never offer it here.
-  const selectableRoster = roster.filter(bot => !bot?.ghost)
+  const selectableRoster = roster.filter(bot => {
+    if (bot?.ghost) {
+      return false
+    }
+
+    if (mode === 'legacy') {
+      return true
+    }
+
+    // Canonical: the authority's own seatable roster wins over connection
+    // membership, so a parked or unseatable bot is never offered (#141178).
+    // The profile is the one createCanonicalGroup will send.
+    return belongsToCurrentConnection(bot) &&
+      (!seatable || seatable.has(bot.route?.targetProfile ?? bot.targetProfile ?? bot.name))
+  })
+
   const selected = selectableRoster.filter(bot => checked[botRosterKey(bot)])
   const visible: RosterRow[] = filterBots(selectableRoster, allMeta, query)
   const atCap = selected.length >= GROUP_CHAT_MAX_MEMBERS
@@ -1214,7 +1344,8 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
     ? selected.map(bot => displayName(bot, botRosterMeta(bot, allMeta))).join(', ')
     : b.group.nameLabel
 
-  const canCreate = selected.length >= 2 && Boolean(name.trim() || selected.length)
+  const canCreate = selected.length >= 2 && Boolean(name.trim() || selected.length) &&
+    (mode === 'canonical' || mode === 'legacy')
 
   const creating = useRef(false)
 
@@ -1229,17 +1360,23 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
       return
     }
 
-    const route = captureCanonicalGroupRoute()
-    const sourceCurrent = groupCreationSource(route)
+    const route = observedRoute
 
-    const capabilities = await canonicalGroupRequest<unknown>(route, 'groups.capabilities')
-    const mode = groupExecutionMode(capabilities)
-
-    if (!sourceCurrent() || mode === 'unavailable') {
+    if (!route) {
       throw new Error(b.canonical.driverUnavailable)
     }
 
-    if (mode === 'canonical') {
+    const { mode: currentMode, sourceCurrent } = await revalidateGroupCreationMode(route, capability, source, b.canonical.driverUnavailable)
+
+    if (!sourceCurrent()) {
+      throw new Error(b.canonical.driverUnavailable)
+    }
+
+    if (currentMode === 'canonical') {
+      if (!sourceCurrent()) {
+        throw new Error(b.canonical.driverUnavailable)
+      }
+
       const created = await createCanonicalGroup(route, base, durableGroupChatMembers(selected))
 
       // Creation already succeeded; leave it on its owner without adopting a stale result.
@@ -1269,6 +1406,10 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
 
     const groupName = uniqueGroupChatName(base, taken)
     const roomId = mintGroupRoomId()
+
+    if (!sourceCurrent()) {
+      throw new Error(b.canonical.driverUnavailable)
+    }
 
     for (const bot of selected) {
       void saveBotMeta(bot, groupMembershipPatch(botRosterMeta(bot, allMeta), groupName, true))
@@ -1313,6 +1454,7 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
           <DialogTitle>{b.group.newTitle}</DialogTitle>
           <DialogDescription>{`Pick 2–${GROUP_CHAT_MAX_MEMBERS} bots. Local memberships sync through each Bot profile; cross-machine members stay scoped to this room.`}</DialogDescription>
         </DialogHeader>
+        {mode === 'unavailable' && <p role="status">{b.canonical.driverUnavailable}</p>}
         {/* TODO(bot-mode-types): this search box never takes focus when the dialog
             opens — SearchField accepts no `autoFocus` prop and forwards no extra
             props, so the `autoFocus` that used to sit here was inert. */}
