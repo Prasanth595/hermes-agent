@@ -14,6 +14,7 @@ import type { BootTranslations } from './types_boot'
 import type { CatalogInstallTranslations } from './types_catalog_install'
 import type { ClarifyCopy } from './types_clarify'
 import type { ConnectorAccountsTranslations, ConnectorCardTranslations } from './types_connectors'
+import type { CustomEndpointsTranslations } from './types_custom_endpoints'
 import type { GatewayGroupOpenCopy, SkillDeepLinkCopy } from './types_deep_links'
 import type { FirstRunCopy } from './types_first_run'
 import type { ModelMenuTranslations } from './types_model_menu'
@@ -22,6 +23,7 @@ import type { NoticeTranslations } from './types_notices'
 import type { OnboardingTranslations } from './types_onboarding'
 import type { SidebarProjectsTranslations } from './types_projects'
 import type { SharedMetricsTranslations } from './types_shared_metrics'
+import type { StorageSectionTranslations } from './types_storage_section'
 import type { ThemePickerCopy } from './types_theme_picker'
 import type { UninstallSectionTranslations } from './types_uninstall_section'
 import type { UpdateChannelCopy } from './types_update_channel'
@@ -619,6 +621,7 @@ export interface Translations extends NoticeTranslations {
       mcp: string
       archivedChats: string
       sessions: string
+      storage: string
       about: string
       billing: string
       notifications: string
@@ -930,47 +933,8 @@ export interface Translations extends NoticeTranslations {
     fieldLabels: Record<string, string>
     fieldDescriptions: Record<string, string>
     uninstallSection: UninstallSectionTranslations
-    customEndpoints: {
-      active: string
-      apiKeySet: string
-      use: string
-      editTitle: string
-      addTitle: string
-      fields: {
-        name: string
-        providerId: string
-        endpointUrl: string
-        defaultModel: string
-        context: string
-        apiKey: string
-        apiKeyNewPlaceholder: string
-        apiKeyPlaceholder: string
-        useNewChats: string
-        discoverModels: string
-      }
-      test: string
-      save: string
-      newEndpoint: string
-      apiMode: string
-      autoDetect: string
-      couldNotLoad: string
-      endpointSaved: string
-      saveFailed: string
-      endpointReachable: string
-      endpointReachableTransport: (transport: string) => string
-      endpointReachableModels: (reachable: string, count: number) => string
-      endpointValidationFailed: string
-      validationFailed: string
-      activationFailed: string
-      deleteConfirm: (name: string) => string
-      deleteFailed: string
-      title: string
-      deleteEndpoint: string
-      emptyDescription: string
-      emptyTitle: string
-      namePlaceholder: string
-      contextPlaceholder: string
-    }
+    storageSection: StorageSectionTranslations
+    customEndpoints: CustomEndpointsTranslations
     computerUse: {
       accessibility: string
       screenRecording: string
