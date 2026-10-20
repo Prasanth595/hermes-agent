@@ -258,6 +258,52 @@ def _decode_keychain_attr(match: Optional[re.Match[str]]) -> str:
     return match.group("text") or ""
 
 
+def _claude_code_keychain_account() -> str:
+    """The account Claude Code files its Keychain item under: ``$USER``, else the OS user name
+    (Claude Code's ``process.env.USER || os.userInfo().username``; ``getpass`` would try $LOGNAME first)."""
+    if user := os.environ.get("USER"):
+        return user
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name  # windows-footgun: ok (callers are Darwin-only)
+    except (ImportError, AttributeError, KeyError, OSError):  # no resolvable user name
+        return ""
+
+
+# ``security`` exits 44 (errSecItemNotFound) when no item matches; anything else is a real failure
+# (locked keychain, access denied) that must not fall through to some other account's item.
+_SECURITY_ITEM_NOT_FOUND = 44
+
+
+def _run_claude_code_keychain_lookup(flag: str) -> Optional[subprocess.CompletedProcess]:
+    """``security find-generic-password <flag>`` for the Claude Code item, or None when there is none.
+
+    Several items can share the service name (other accounts, a migrated Mac), and an unscoped
+    lookup returns whichever comes first, often a stale login. Claude Code itself reads the item
+    filed under its account (``-a $USER``), so that one goes first; the unscoped lookup is only the
+    fallback when no item exists under that account (a lone item filed under another name).
+    """
+    account = _claude_code_keychain_account()
+    scopes = ([["-a", account]] if account else []) + [[]]
+    for scope in scopes:
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password", *scope, "-s", _CLAUDE_CODE_KEYCHAIN_SERVICE, flag],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+                stdin=subprocess.DEVNULL, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            logger.debug("Keychain: security command not available or timed out")
+            return None
+        if result.returncode == 0:
+            return result
+        if result.returncode != _SECURITY_ITEM_NOT_FOUND:
+            logger.debug("Keychain: lookup failed (rc=%s)", result.returncode)
+            return None
+    logger.debug("Keychain: no entry found for %r", _CLAUDE_CODE_KEYCHAIN_SERVICE)
+    return None
+
+
 def _find_claude_code_keychain_item() -> Optional[tuple[str, dict[str, Any]]]:
     """``(account, payload)`` of the ``Claude Code-credentials`` login Keychain item, or None.
 
@@ -267,15 +313,8 @@ def _find_claude_code_keychain_item() -> Optional[tuple[str, dict[str, Any]]]:
     """
     if platform.system() != "Darwin":
         return None
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-s", _CLAUDE_CODE_KEYCHAIN_SERVICE, "-g"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, stdin=subprocess.DEVNULL,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
+    result = _run_claude_code_keychain_lookup("-g")
+    if result is None:
         return None
     account = _decode_keychain_attr(re.search(r'^\s*"acct"<blob>=' + _KEYCHAIN_ATTR + r"\s*$", result.stdout, re.MULTILINE))
     raw = _decode_keychain_attr(re.search(r"^password: " + _KEYCHAIN_ATTR + r"\s*$", result.stderr, re.MULTILINE))
@@ -297,17 +336,8 @@ def _read_claude_code_keychain_payload() -> Optional[dict[str, Any]]:
     """
     if platform.system() != "Darwin":
         return None
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-s", _CLAUDE_CODE_KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5, stdin=subprocess.DEVNULL,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        logger.debug("Keychain: security command not available or timed out")
-        return None
-    if result.returncode != 0:
-        logger.debug("Keychain: no entry found for %r", _CLAUDE_CODE_KEYCHAIN_SERVICE)
+    result = _run_claude_code_keychain_lookup("-w")
+    if result is None:
         return None
     raw = result.stdout.strip()
     if not raw:
