@@ -16,6 +16,7 @@ import type { ClarifyCopy } from './types_clarify'
 import type { ConnectorAccountsTranslations, ConnectorCardTranslations } from './types_connectors'
 import type { GatewayGroupOpenCopy, SkillDeepLinkCopy } from './types_deep_links'
 import type { FirstRunCopy } from './types_first_run'
+import type { MessagingGatewayTranslations } from './types_messaging_gateway'
 import type { ModelMenuTranslations } from './types_model_menu'
 import type { ModelSettingsTranslations } from './types_model_settings'
 import type { NoticeTranslations } from './types_notices'
@@ -2263,7 +2264,7 @@ export interface Translations extends NoticeTranslations {
     }
   }
 
-  messaging: {
+  messaging: MessagingGatewayTranslations & {
     search: string
     statusFilter: Record<'all' | 'bad' | 'good' | 'muted' | 'warn', string>
     loading: string
