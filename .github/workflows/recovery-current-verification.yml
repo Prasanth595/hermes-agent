@@ -19,216 +19,43 @@ defaults:
   run:
     shell: bash
 jobs:
-  python:
-    name: Required Python suite slice ${{ matrix.slice }}/2
+  python-retry:
+    name: Required Python failures with ripgrep installed
     if: github.repository == 'ocasta181/hermes-agent'
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        slice:
-        - 1
-        - 2
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       with:
         ref: 34cbe0abeb953ef2456510f33eb9ba4fc31f98c6
         fetch-depth: 64
+    - name: Install the required search executable
+      run: "sudo apt-get update\nsudo apt-get install -y ripgrep\ncommand -v rg\n\
+        rg --version\n"
     - uses: ./.github/actions/setup-pm
       with:
-        extras: '["all", "anthropic", "bedrock", "mistral", "fal", "modal", "daytona", "parallel-web"]'
+        extras: '["all", "anthropic", "bedrock", "mistral", "fal", "modal", "daytona",
+          "parallel-web"]'
         test-environment: 'true'
         prune-python-cache: true
-    - name: Record the canonical test inventory
-      run: "mkdir -p \"$RUNNER_TEMP/recovery-suite\"\ngit rev-parse HEAD\n\"$HERMES_PYTHON\" scripts/run_tests_parallel.py
-        --generate-slices 2 > \"$RUNNER_TEMP/recovery-suite/inventory.json\"\n"
-    - name: Run the required suite slice
+    - name: Record unchanged source and the exact retry inventory
+      run: "mkdir -p \"$RUNNER_TEMP/recovery-suite\"\ngit rev-parse HEAD | tee \"\
+        $RUNNER_TEMP/recovery-suite/source.log\"\nrg --version | tee \"$RUNNER_TEMP/recovery-suite/environment.log\"\
+        \n\"$HERMES_PYTHON\" scripts/run_tests_parallel.py --generate-slices 2 > \"\
+        $RUNNER_TEMP/recovery-suite/inventory.json\"\n"
+    - name: Run the three unchanged failed files with the canonical wrapper
       env:
         HERMES_TEST_WORKERS: '2'
         HERMES_TEST_FILE_TIMEOUT: '600'
-      run: "/bin/bash scripts/run_tests.sh --slice \"${{ matrix.slice }}/2\" -j 2 2>&1 | tee \"$RUNNER_TEMP/recovery-suite/required-suite.log\"\
-        \n"
+      run: "/bin/bash scripts/run_tests.sh --files tests/hermes_cli/test_doctor_pm_store_probe.py:tests/tools/test_search_auto_multiline.py:tests/tools/test_search_zero_match_and_multipath.py
+        -j 2 2>&1 | tee \"$RUNNER_TEMP/recovery-suite/required-suite.log\"\n"
     - name: Record source custody
       if: always()
-      run: "git rev-parse HEAD\ntest \"$(git rev-parse HEAD)\" = \"$RECOVERY_SOURCE_COMMIT\"\ngit diff --exit-code\ngit diff
-        --cached --exit-code\ngit status --porcelain=v1\n"
+      run: "git rev-parse HEAD\ntest \"$(git rev-parse HEAD)\" = \"$RECOVERY_SOURCE_COMMIT\"\
+        \ngit diff --exit-code\ngit diff --cached --exit-code\ngit status --porcelain=v1\n"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
-        name: recovery-current-python-${{ matrix.slice }}
+        name: recovery-current-python-ripgrep-retry
         path: ${{ runner.temp }}/recovery-suite
         retention-days: 7
-  workspace:
-    name: All required workspace checks on Linux
-    if: github.repository == 'ocasta181/hermes-agent'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    steps:
-    - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      with:
-        ref: 34cbe0abeb953ef2456510f33eb9ba4fc31f98c6
-        fetch-depth: 64
-    - uses: ./.github/actions/setup-pm
-      with:
-        toolchain: all
-        extras: '[]'
-        test-environment: 'true'
-    - name: Install the native display dependencies
-      run: "sudo apt-get update\nsudo apt-get install -y zsh xvfb xauth libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils
-        libatspi2.0-0 libdrm2 libgbm1 libasound2t64\n"
-    - name: Install locked workspace dependencies
-      run: "npm ci\n"
-    - name: Run all blocking static checks
-      run: "mkdir -p \"$RUNNER_TEMP/recovery-workspace\"\n\"$HERMES_PYTHON\" scripts/check --commit \"$RECOVERY_SOURCE_COMMIT\"\
-        \ --base c0015464f0f40d52c5702a84cf58e70361f4a04c 2>&1 | tee \"$RUNNER_TEMP/recovery-workspace/static.log\"\n"
-    - name: Run every upstream workspace check
-      run: "node .github/scripts/run-workspace-checks.mjs --list > \"$RUNNER_TEMP/recovery-workspace/check-inventory.log\"\
-        \nxvfb-run -a -s \"-screen 0 1600x1000x24 -ac\" node .github/scripts/run-workspace-checks.mjs --concurrency 1 2>&1
-        | tee \"$RUNNER_TEMP/recovery-workspace/workspace-checks.log\"\n"
-    - name: Record source custody
-      if: always()
-      run: "git rev-parse HEAD\ntest \"$(git rev-parse HEAD)\" = \"$RECOVERY_SOURCE_COMMIT\"\ngit diff --exit-code\ngit diff
-        --cached --exit-code\ngit status --porcelain=v1\n"
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: recovery-current-workspace
-        path: ${{ runner.temp }}/recovery-workspace
-        retention-days: 7
-  native:
-    name: Built UI on ${{ matrix.os }}
-    if: github.repository == 'ocasta181/hermes-agent'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        os:
-        - macos-15
-        - ubuntu-24.04
-        - windows-2025
-    steps:
-    - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      with:
-        fetch-depth: 3
-        ref: 24195078323913220e98746363d1d524ab9ab9be
-    - uses: ./.github/actions/setup-pm
-      with:
-        toolchain: all
-    - name: Verify the certificate tool before building
-      run: "recovery_openssl=\"$(command -v openssl)\"\nif [[ \"$RUNNER_OS\" == Windows ]]; then recovery_openssl=\"$(cygpath
-        -w \"$recovery_openssl\")\"; fi\nprintf 'RECOVERY_OPENSSL=%s\\n' \"$recovery_openssl\" >> \"$GITHUB_ENV\"\nRECOVERY_OPENSSL=\"\
-        $recovery_openssl\" node -e 'require(\"node:child_process\").execFileSync(process.env.RECOVERY_OPENSSL,[\"version\"\
-        ],{stdio:\"inherit\"})'\n"
-    - name: Install Linux display dependencies
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64 libgbm1
-    - name: Create a clean checkout of the candidate
-      run: "git fetch --no-tags --depth=1 origin \"$RECOVERY_SOURCE_COMMIT\"\ngit worktree add --detach \"$RUNNER_TEMP/recovery-source\"\
-        \ \"$RECOVERY_SOURCE_COMMIT\"\n"
-    - name: Restore the exact native app build
-      id: app
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      with:
-        path: ${{ runner.temp }}/recovery-source/apps/desktop/release
-        key: recovery-directory-v1-${{ matrix.os }}-${{ env.RECOVERY_SOURCE_COMMIT }}
-    - name: Build the complete bundled app as an unpacked native app
-      if: steps.app.outputs.cache-hit != 'true'
-      id: build
-      timeout-minutes: 50
-      run: "mkdir -p \"$RUNNER_TEMP/recovery-build\"\n\"$HERMES_PYTHON\" .review/build_directory.py --source \"$RUNNER_TEMP/recovery-source\"\
-        \ 2>&1 | tee \"$RUNNER_TEMP/recovery-build/build.log\"\n"
-    - name: Save the built app before UI checks
-      if: steps.build.outcome == 'success'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-      with:
-        path: ${{ runner.temp }}/recovery-source/apps/desktop/release
-        key: recovery-directory-v1-${{ matrix.os }}-${{ env.RECOVERY_SOURCE_COMMIT }}
-    - name: Install test tools when reusing a cached app
-      if: steps.app.outputs.cache-hit == 'true'
-      working-directory: ${{ runner.temp }}/recovery-source
-      run: npm ci
-    - name: Prepare verified model and engine inputs
-      id: inputs
-      run: "cd \"$RUNNER_TEMP/recovery-source\"\n\"$HERMES_PYTHON\" \"$GITHUB_WORKSPACE/.review/prepare_runner.py\"\nnode
-        -e 'require(\"fs\").symlinkSync(process.argv[1],process.argv[2],\"junction\")' \"$RUNNER_TEMP/recovery-source/node_modules\"\
-        \ \"$GITHUB_WORKSPACE/.review/node_modules\"\n"
-    - name: Check engine Pause, app restart, Resume, and native inference
-      if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/engine-pause-resume\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case engine-pause-resume --prepared\n"
-    - name: Check Discard, completed-file preservation, and app restart
-      if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/engine-discard\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case engine-discard --prepared\n"
-    - name: Check TLS failure, app restart, model Resume, and native inference
-      if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/model-resume\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case model-resume --prepared\n"
-    - name: Prepare the nine localized control checks
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      env:
-        RECOVERY_SOURCE_ROOT: ${{ runner.temp }}/recovery-source
-      run: node .review/prepare-locales.mjs
-    - name: Check recovery controls in English
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-en\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale en --prepared\n"
-    - name: Check recovery controls in Arabic
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-ar\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale ar --prepared\n"
-    - name: Check recovery controls in Simplified Chinese
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-zh\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale zh --prepared\n"
-    - name: Check recovery controls in Traditional Chinese
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-zh-hant\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale zh-hant --prepared\n"
-    - name: Check recovery controls in Japanese
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-ja\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale ja --prepared\n"
-    - name: Check recovery controls in Russian
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-ru\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale ru --prepared\n"
-    - name: Check recovery controls in French
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-fr\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale fr --prepared\n"
-    - name: Check recovery controls in German
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-de\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale de --prepared\n"
-    - name: Check recovery controls in Spanish
-      if: ${{ !cancelled() && runner.os == 'macOS' && steps.inputs.outcome == 'success' }}
-      timeout-minutes: 5
-      run: "\"$HERMES_PYTHON\" .review/run.py --source \"$RUNNER_TEMP/recovery-source\" --evidence \"$RUNNER_TEMP/recovery-evidence/locale-es\"\
-        \ --inputs \"$RUNNER_TEMP/recovery-source/.build/recovery-native-inputs\" --case locale --locale es --prepared\n"
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: recovery-native-${{ runner.os }}
-        path: "${{ runner.temp }}/recovery-build\n${{ runner.temp }}/recovery-evidence\n"
-        retention-days: 7
-    - name: Verify unchanged candidate source
-      if: always()
-      working-directory: ${{ runner.temp }}/recovery-source
-      run: "git rev-parse HEAD\ntest \"$(git rev-parse HEAD)\" = \"$RECOVERY_SOURCE_COMMIT\"\ngit diff --exit-code\ngit diff
-        --cached --exit-code\ngit status --porcelain=v1\n"
