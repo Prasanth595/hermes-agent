@@ -1214,14 +1214,15 @@ def _confirm_startup_expensive_model_override(args) -> None:
     if not model:
         return
     provider = (explicit_provider or model_cfg.get("provider") or "").strip()
+    is_interactive = sys.stdin.isatty()
     try:
-        # Unified registry: cost guard + id-keyed guards (e.g. the
-        # data-training-tier warning) all fire at startup too.
+        # Unified registry: cost guard + id-keyed guards (e.g. the data-training-tier warning)
+        # all fire at startup too; ``interactive`` skips only the data-policy one when acked.
         warnings = selection_warnings(
             model,
             provider=provider,
             base_url=(model_cfg.get("base_url") or ""),
-            api_key=(model_cfg.get("api_key") or ""),
+            api_key=(model_cfg.get("api_key") or ""), interactive=is_interactive,
         )
     except Exception as exc:
         logger.warning("startup model cost guard failed for %s/%s: %s", provider, model, exc)
@@ -1231,7 +1232,6 @@ def _confirm_startup_expensive_model_override(args) -> None:
 
     # Intentionally independent of --yolo / --accept-hooks: those approve local
     # command risk, not paid aggregator spend or a surprising provider route.
-    is_interactive = sys.stdin.isatty()
     if not is_interactive and security_cfg.get("allow_data_training_tiers_noninteractive") is True:
         acknowledged = [w for w in warnings if w.kind == "data_policy"]
         if acknowledged:

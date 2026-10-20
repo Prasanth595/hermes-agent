@@ -2588,7 +2588,7 @@ export interface StaleAuxAssignment {
 
 export interface ModelAssignmentResponse {
   confirm_message?: string;
-  confirm_required?: boolean;
+  confirm_required?: boolean; confirm_title?: string;  // guard card title, e.g. "Data-Training Tier Warning"
   ok: boolean;
   scope?: string;
   provider?: string;
