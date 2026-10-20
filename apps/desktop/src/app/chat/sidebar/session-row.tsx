@@ -51,8 +51,10 @@ import {
 } from './chrome'
 import { shellOwnsPress } from './reorderable-list'
 import { SessionActionsMenu, SessionContextMenu } from './session-actions-menu'
+import { SessionCardFooter } from './session-card-footer'
 import { sessionRowDetails } from './session-row-details'
 import { resolveSessionRowClick } from './session-row-gesture'
+import { useOwningProfileName } from './session-row-profile-name'
 import { SessionRowSlot } from './session-row-slots'
 import { useProfilePrewarm } from './use-profile-prewarm'
 
@@ -78,6 +80,12 @@ interface SidebarSessionRowProps extends React.ComponentProps<'div'> {
    *  flat cross-profile lists — Pinned and search results in the All-profiles
    *  view — where no group header communicates ownership (#66003). */
   showProfile?: boolean
+  /** Name the owning profile in the row's metadata line, beside the model, for
+   *  lists that merge profiles (#89888). Skipped for the default profile (a
+   *  mark on every row that says "the normal one" is noise) and by callers
+   *  whose list already says who owns the row — a profile-grouped list, or a
+   *  view narrowed to a single profile. */
+  showProfileName?: boolean
   /** Inbox-style card: workspace header, title + last-message preview, and a
    *  model · size footer. The flat recents list opts in via the filter menu;
    *  dense tree surfaces (projects, messaging, pins) keep the one-line row. */
@@ -141,6 +149,7 @@ function SidebarSessionRowImpl({
   dragging = false,
   dragHandleProps,
   showProfile = false,
+  showProfileName = false,
   card = false,
   className,
   style,
@@ -153,11 +162,10 @@ function SidebarSessionRowImpl({
   const title = sessionTitle(session)
   const density = useStore($sessionListDensity)
   const fmt = t.sidebar
-
-  const details = sessionRowDetails(session, {
-    messageCount: fmt.messageCount,
-    toolCallCount: fmt.toolCallCount
-  })
+  // #89888: a list that merges profiles must say whose chat each row is.
+  const owningProfileName = useOwningProfileName(session, showProfileName)
+  const formats = { messageCount: fmt.messageCount, toolCallCount: fmt.toolCallCount }
+  const details = sessionRowDetails(session, formats, { profileName: owningProfileName })
 
   const timestamp = session.last_active || session.started_at
   const age = formatAge(timestamp, r)
@@ -277,14 +285,14 @@ function SidebarSessionRowImpl({
     card ? (sessionProjectLabel(session, projects) ?? (pathLeaf(session.cwd) || t.sidebar.projects.home)) : null
   )
 
-  // Card footer line: which model worked on it and how big it got. Rendered
-  // as separate spans with a flex gap — a joined string can't put real space
-  // between them (HTML collapses runs of whitespace to one).
+  // Card footer line: which model worked on it, how big it got, and — in a
+  // list that merges profiles — whose chat it is (#89888).
   const model = card && session.model ? displayModelName(session.model) : ''
   const size = card && session.message_count > 0 ? r.messageCount(session.message_count) : ''
   // Live plan progress ("3/7"), far right of the footer. A selector keyed to
   // this row: only rows whose own fraction changes repaint on todo events.
   const todoProgress = useStoreSelector($todoProgressBySession, progress => (card ? progress[session.id] : undefined))
+  const cardFooter = { card, model, owner: owningProfileName, size, todoProgress, todoTitle: r.todoProgress }
 
   // An archived session has no live status to paint, so the archive glyph takes
   // the lead slot the dot would occupy instead of adding a column of its own.
@@ -653,22 +661,7 @@ function SidebarSessionRowImpl({
                     </span>
                   ) : null}
                 </div>
-                {model || size || todoProgress ? (
-                  <span
-                    className={cn(
-                      'flex min-w-0 items-baseline gap-2 text-[0.625rem] text-(--ui-text-tertiary)',
-                      SIDEBAR_TRUNCATED_LEADING
-                    )}
-                  >
-                    {model ? <span className="min-w-0 truncate">{model}</span> : null}
-                    {size ? <span className="shrink-0 tabular-nums">{size}</span> : null}
-                    {todoProgress ? (
-                      <span className="ml-auto shrink-0 tabular-nums" title={r.todoProgress}>
-                        {todoProgress}
-                      </span>
-                    ) : null}
-                  </span>
-                ) : null}
+                <SessionCardFooter {...cardFooter} />
               </>
             )
           })()}
@@ -700,6 +693,7 @@ function rowPropsEqual(a: SidebarSessionRowProps, b: SidebarSessionRowProps): bo
     a.reorderable === b.reorderable &&
     a.dragging === b.dragging &&
     a.showProfile === b.showProfile &&
+    a.showProfileName === b.showProfileName &&
     a.card === b.card &&
     a.dragHandleProps === b.dragHandleProps &&
     a.className === b.className &&
