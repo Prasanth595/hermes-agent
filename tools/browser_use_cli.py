@@ -157,7 +157,7 @@ def _managed_browser_use_state(session: str, env: dict, cmd: list[str]) -> Optio
     key = str(runtime)
     with _browser_use_sessions_lock:
         if (state := _browser_use_sessions.get(key)) is None:
-            state = {"key": key, "runtime_dir": runtime, "session": daemon_name,
+            state = {"key": key, "runtime_dir": runtime, "session": daemon_name, "home_key": hermes_home_key(),
                      "cmd": tuple(cmd), "env": dict(env), "last_activity": time.monotonic(),
                      "inflight": 0, "operation_lock": threading.Lock()}
             _browser_use_sessions[key] = state
@@ -300,7 +300,7 @@ def _code_url_verdict(code: str) -> _CodeUrlVerdict:
     return _CodeUrlVerdict(None, local_sidecar)
 
 
-def _base_subprocess_env() -> dict:
+def _base_subprocess_env(*, manage_runtime: bool = False) -> dict:
     from tools.browser_tool import _build_browser_env
     env = _build_browser_env()
     # The harness runs on Hermes's own interpreter, but a bundled Desktop install boots that
@@ -315,7 +315,8 @@ def _base_subprocess_env() -> dict:
         env.pop("PYTHONPATH", None)
     env["PATH"] = _floor_subprocess_path(env.get("PATH", ""))
     env.setdefault("ANONYMIZED_TELEMETRY", "false")
-    namespace_harness_dirs(env, _served_profile_tag())  # a served profile's own harness runtime/tmp dirs
+    if not manage_runtime or env.get("BH_RUNTIME_DIR") or env.get("BH_TMP_DIR"):
+        namespace_harness_dirs(env, _served_profile_tag())  # a served profile's own harness runtime/tmp dirs
     return env
 
 
@@ -901,9 +902,15 @@ def _route_exec_current(env: dict, session: str, task_id: Optional[str], local: 
     return routed, route_err, sidecar, generation
 
 
-def _reload_if_republished(env: dict, generation: int) -> None:
+def _reload_if_republished(env: dict, generation: int, lifecycle_state: dict | None = None) -> None:
     """Stop this call's daemon if the profile published a new endpoint while it spawned on the old one."""
     if _live_generation() == generation:
+        return
+    if lifecycle_state is not None:
+        if _stop_browser_use_state(lifecycle_state):
+            with _browser_use_sessions_lock:
+                if _browser_use_sessions.get(lifecycle_state["key"]) is lifecycle_state:
+                    _browser_use_sessions.pop(lifecycle_state["key"], None)
         return
     daemon = daemon_identity(env)
     with _driven_daemons_lock:
@@ -953,7 +960,8 @@ def _dispatch_browser_use(cmd: list[str], code: str, env: dict, timeout: int,
     _attach_vault_supervisor(env, task_id)
     if lifecycle_state is None:
         with _driven_daemons_lock:
-            _driven_daemons.add(env.get("BU_NAME", "default"))
+            daemon = daemon_identity(env)
+            _driven_daemons[daemon] = hermes_home_key()
     try:
         return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
     except subprocess.TimeoutExpired:
@@ -998,7 +1006,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         return tool_error("browser-harness is missing from Hermes's Python environment. "
                           "Run `hermes update` to re-sync it.")
 
-    env = _base_subprocess_env()
+    env = _base_subprocess_env(manage_runtime=True)
     if session:
         if not _SESSION_RE.match(session):
             return tool_error(f"Invalid session name {session!r}: use 1-64 letters, digits, "
@@ -1038,7 +1046,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             dispatched = run_fenced({"features": {"local": True}}, dispatch)
         else:
             dispatched = dispatch()
-        _reload_if_republished(env, generation)
+        _reload_if_republished(env, generation, lifecycle_state)
         if "proc" not in dispatched:
             if "error_result" in dispatched:
                 return dispatched["error_result"]
