@@ -1,0 +1,16 @@
+name: rentahuman
+title: RentAHuman
+repo: https://github.com/rentahuman-ai/human-rental-marketplace
+sha: 63a712e4206672c2e99103321fc6f586988d1119
+subdir: packages/mcp/hermes
+description: Find people and coordinate real-world work through the RentAHuman marketplace.
+maintainer: RentAHuman
+tier: community
+category: tools
+docs_url: https://rentahuman.ai/docs#mcp
+version: "3.16.1"
+capabilities:
+  provides_tools: []
+  provides_hooks: []
+  provides_middleware: []
+  requires_env: []

@@ -1,0 +1,37 @@
+# Nous-approved MCP catalog entry.
+# Presence in this directory = approval. Merged via PR review.
+manifest_version: 1
+
+name: rentahuman
+description: Find people and manage real-world work through RentAHuman.
+source: https://rentahuman.ai/docs#mcp
+
+# RentAHuman hosts a Streamable HTTP MCP endpoint and supports OAuth 2.1,
+# PKCE, and Dynamic Client Registration. The resource and authorization-server
+# metadata endpoints were verified live during submission preparation.
+transport:
+  type: http
+  url: https://rentahuman.ai/api/mcp
+
+auth:
+  type: oauth
+
+# Composer-suggestion triggers (desktop brand pills).
+suggest:
+  keywords:
+    - rentahuman
+    - hire a human
+    - real-world task
+  hosts:
+    - rentahuman.ai
+
+post_install: |
+  On first connection, Hermes opens a browser to sign in to RentAHuman and
+  approve access to your account. The tools can post or fund bounties, message
+  people, accept applicants, book services, and manage payments. Use those
+  actions only when the account owner has asked for them.
+
+  To have Hermes request approval before each state-changing call, add
+  `trust: untrusted` under `mcp_servers.rentahuman` in `~/.hermes/config.yaml`.
+  You can adjust the selected tools any time with:
+    hermes mcp configure rentahuman
