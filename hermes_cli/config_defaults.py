@@ -321,6 +321,10 @@ DEFAULT_CONFIG = {
         # bot_relay). Plain background processes without notify_on_complete are never waited on. 0
         # disables.
         "oneshot_completion_wait_seconds": 600.0,
+        # false = the terminal tool never starts a tracked background process: background=true is
+        # refused, an over-cap foreground timeout is refused instead of promoted, and a foreground
+        # command is not yielded to the background mid-run.
+        "allow_background": True,
         "process_wait_auto_notify": True,  # 2 unchanged wait/poll -> notify_on_complete + stop; False = old polling
         # Env vars passed into sandboxed terminal/execute_code (plus skill-declared required_environment_variables).
         "env_passthrough": [],
