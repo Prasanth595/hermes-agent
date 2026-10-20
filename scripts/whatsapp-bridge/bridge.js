@@ -409,7 +409,8 @@ async function startSocket() {
     },
   });
 
-  sock.ev.on('creds.update', () => { saveCreds(); lidToPhone = buildLidMap(); });
+  const saveCredentials = createCredsSaver(saveCreds);
+  sock.ev.on('creds.update', async () => { await saveCredentials(); lidToPhone = buildLidMap(); });
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
