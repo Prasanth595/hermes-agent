@@ -2882,8 +2882,6 @@ class TestSystemdCgroupIsolation:
         assert pr._stop_systemd_unit("hermes-worker-gone.scope") is True
 
 
-
-
 class TestNotificationRedaction:
     """Background-process notification delivery (completion_queue) applies the
     same redaction as the explicit process tool — issue #43025 gap.

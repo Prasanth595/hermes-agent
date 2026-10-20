@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, List, Optional
 
 from hermes_constants import get_hermes_home, hermes_home_key
 from tools.daemon_pool import DaemonThreadPoolExecutor
@@ -511,6 +511,35 @@ def claim_event_delivery(evt: dict[str, Any], consumer: str) -> Optional[str]:
         return ""
     claim_id = f"{consumer}:{os.getpid()}:{uuid.uuid4().hex}"
     return claim_id if claim_completion_delivery(delegation_id, claim_id) else None
+
+
+def renew_completion_delivery(delegation_id: str, claim_id: str) -> bool:
+    """Extend the lease for a pending completion held by ``claim_id``."""
+    now = time.time()
+    with _DB_LOCK, _transaction() as conn:
+        row = conn.execute(
+            "SELECT delivery_state FROM async_delegations WHERE delegation_id=?",
+            (delegation_id,),
+        ).fetchone()
+        if row is None:
+            return True  # legacy event created before durable dispatch
+        cur = conn.execute(
+            """UPDATE async_delegations SET delivery_claimed_at=?, updated_at=?
+               WHERE delegation_id=? AND delivery_state='pending'
+                 AND delivery_claim=?""",
+            (now, now, delegation_id, claim_id),
+        )
+        return cur.rowcount == 1
+
+
+def renew_event_delivery(evt: dict[str, Any], claim_id: str) -> bool:
+    """Renew a durable delegation claim; non-durable events need no lease."""
+    if not claim_id or evt.get("type") != "async_delegation":
+        return True
+    delegation_id = str(evt.get("delegation_id") or "")
+    if not delegation_id:
+        return True
+    return renew_completion_delivery(delegation_id, claim_id)
 
 
 def release_completion_delivery(delegation_id: str, claim_id: str) -> bool:
